@@ -192,7 +192,7 @@ def load_data(batch_size=1, suffix=''):
 
 
 
-def load_my_data(batch_size=1, suffix='_my'):
+def load_my_data(batch_size=1, suffix='_my', self_loop=False):
     feat_train = np.load('data/feat_train' + suffix + '.npy')
     edges_train = np.load('data/edges_train' + suffix + '.npy')
 
@@ -248,9 +248,14 @@ def load_my_data(batch_size=1, suffix='_my'):
     edges_test = torch.LongTensor(edges_test)
 
     # Exclude self edges
-    off_diag_idx = np.ravel_multi_index(
-        np.where(np.ones((num_atoms, num_atoms)) - np.eye(num_atoms)),
-        [num_atoms, num_atoms])
+    if not self_loop:
+        off_diag_idx = np.ravel_multi_index(
+            np.where(np.ones((num_atoms, num_atoms)) - np.eye(num_atoms)),
+            [num_atoms, num_atoms])
+    else:
+        off_diag_idx = np.ravel_multi_index(
+            np.where(np.ones((num_atoms, num_atoms))),
+            [num_atoms, num_atoms])
     edges_train = edges_train[:, off_diag_idx]
     edges_valid = edges_valid[:, off_diag_idx]
     edges_test = edges_test[:, off_diag_idx]
@@ -547,7 +552,7 @@ def kl_categorical_uniform(preds, num_atoms, num_edge_types, add_const=False,
 
 
 def nll_gaussian(preds, target, variance, add_const=False):
-    neg_log_p = ((preds - target) ** 2 / (2 * variance))
+    neg_log_p = ((preds - target) ** 2 / (2 * variance))  
     if add_const:
         const = 0.5 * np.log(2 * np.pi * variance)
         neg_log_p += const
@@ -556,6 +561,7 @@ def nll_gaussian(preds, target, variance, add_const=False):
 
 def edge_accuracy(preds, target):
     _, preds = preds.max(-1)
+#     import pdb;pdb.set_trace()
     correct = preds.float().data.eq(
         target.float().data.view_as(preds)).cpu().sum()
     return np.float(correct) / (target.size(0) * target.size(1))

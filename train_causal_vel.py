@@ -11,7 +11,7 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 
 from utils import *
-from modules_causal import *
+from modules_causal_vel import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--no-cuda', action='store_true', default=False,
@@ -50,7 +50,7 @@ parser.add_argument('--load-folder', type=str, default='',
                          'Leave empty to train from scratch')
 parser.add_argument('--edge-types', type=int, default=2,
                     help='The number of edge types to infer.')
-parser.add_argument('--dims', type=int, default=1,
+parser.add_argument('--dims', type=int, default=8,
                     help='The number of input dimensions (position + velocity).')
 parser.add_argument('--timesteps', type=int, default=19,
                     help='The number of time steps per sample.')
@@ -70,8 +70,12 @@ parser.add_argument('--prior', action='store_true', default=False,
                     help='Whether to use sparsity prior.')
 parser.add_argument('--dynamic-graph', action='store_true', default=False,
                     help='Whether test with dynamically re-computed graph.')
+parser.add_argument('--self-loop', action='store_true', default=False,
+                    help='Whether graph contains self loop.')
 parser.add_argument('--kl', type=float, default=1,
                     help='Whether to include kl as loss.')
+parser.add_argument('--comment', type=str, default='',
+                    help='Additional info for the run.')
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -106,29 +110,25 @@ else:
           "Testing (within this script) will throw an error.")
 
 train_loader, valid_loader, test_loader = load_my_data(batch_size=args.batch_size, 
-                                                       suffix=args.suffix)
+                                                       suffix=args.suffix, self_loop=args.self_loop)
 
 print(args, file=log)
 log.flush()
 
-# Assuming no self loops
-off_diag = np.ones([args.num_atoms, args.num_atoms]) - np.eye(args.num_atoms)
-# This is not adjacency matrix since it's 56*8, not 8*8!
+if args.self_loop:
+    # Assuming there is self loops
+    off_diag = np.ones([args.num_atoms, args.num_atoms])
+else:
+    off_diag = np.ones([args.num_atoms, args.num_atoms]) - np.eye(args.num_atoms)
+
+# This is not adjacency matrix since it's 49*7, not 7*7!
 rel_rec = np.array(encode_onehot(np.where(off_diag)[0]), dtype=np.float32)
 rel_send = np.array(encode_onehot(np.where(off_diag)[1]), dtype=np.float32)
 rel_rec = torch.FloatTensor(rel_rec)
 rel_send = torch.FloatTensor(rel_send)
 
 if args.decoder == 'mlp':
-    decoder = MLPDecoder_Causal(n_in_node=args.dims,
-                         edge_types=args.edge_types,
-                         msg_hid=args.decoder_hidden,
-                         msg_out=args.decoder_hidden,
-                         n_hid=args.decoder_hidden,
-                         do_prob=args.decoder_dropout,
-                         skip_first=args.skip_first,
-                         cuda=args.cuda,
-                         num_nodes=args.num_atoms)
+    decoder = MLPDecoder_Causal(args)
 elif args.decoder == 'rnn':
     decoder = RNNDecoder(n_in_node=args.dims,
                          edge_types=args.edge_types,
@@ -208,13 +208,13 @@ def train(epoch, best_val_loss):
                              args.temp, args.hard, args.prediction_steps)
         prob = my_softmax(logits, -1)
 
-        target = data[:, :, 1:, :]
- 
+        #data: bs, #node, #timesteps, dim
+        target = data[:, :, 1:, :] 
         loss_nll = nll_gaussian(output, target, args.var)
 
         if args.prior:
 #             import pdb;pdb.set_trace()
-            loss_kl = kl_categorical(decoder.rel_graph.softmax(-1), log_prior, args.num_atoms)
+            loss_kl = kl_categorical(prob, log_prior, args.num_atoms)
         else:
             loss_kl = kl_categorical_uniform(prob, args.num_atoms,
                                              args.edge_types)
@@ -229,7 +229,7 @@ def train(epoch, best_val_loss):
         loss.backward()    
 #         print(decoder.rel_graph.grad)
         optimizer.step()
-
+#         import pdb;pdb.set_trace()
         mse_train.append(F.mse_loss(output, target).item())
         nll_train.append(loss_nll.item())
         kl_train.append(loss_kl.item())
@@ -263,15 +263,14 @@ def train(epoch, best_val_loss):
                              args.temp, args.hard, 1)
         prob = my_softmax(logits, -1)
 
-        target = data[:, :, 1:, :]
+        target = data[:, :, 1:, :] 
         loss_nll = nll_gaussian(output, target, args.var)
         if args.prior:
             loss_kl = kl_categorical(prob, log_prior, args.num_atoms)
         else:
             loss_kl = kl_categorical_uniform(prob, args.num_atoms,
                                              args.edge_types)
-#         loss_kl = kl_categorical_uniform(prob, args.num_atoms, args.edge_types, add_const=True)
-#         import pdb;pdb.set_trace()
+#         loss_kl = kl_categorical_uniform(prob, args.num_atoms, args.edge_types, add_const=True)   
 #         acc = edge_accuracy(decoder.rel_graph.squeeze(), relations[0,-7:].unsqueeze(-1))
         acc = edge_accuracy(logits, relations)
         acc_val.append(acc)

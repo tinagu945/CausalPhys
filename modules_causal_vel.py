@@ -53,19 +53,32 @@ class MLPEncoder_Causal(nn.Module):
 class MLPDecoder_Causal(nn.Module):
     """MLP decoder module."""
 
-    def __init__(self, n_in_node, edge_types, msg_hid, msg_out, n_hid,
-                 do_prob=0., skip_first=False, cuda=True, num_nodes=7, pred_steps=1):
+    def __init__(self, args):
         super(MLPDecoder_Causal, self).__init__()
+        n_in_node=args.dims
+        edge_types=args.edge_types
+        msg_hid=args.decoder_hidden
+        msg_out=args.decoder_hidden
+        n_hid=args.decoder_hidden
+        skip_first = args.skip_first
+        cuda = args.cuda
+        num_nodes= args.num_atoms
+        do_prob=args.decoder_dropout
         
-        #TODO: only the last col of the original adj matrix will be trained   
+#         import pdb;pdb.set_trace() 
+        #TODO: only the last col of the original adj matrix will be trained  
+        if args.self_loop:
+            self.rel_graph_shape = (1, 1, num_nodes**2, edge_types)
+        else:
+            self.rel_graph_shape = (1, 1, num_nodes*(num_nodes-1), edge_types)
+              
         if cuda:
-            self.rel_graph = torch.zeros((1, 1, num_nodes*(num_nodes-1), edge_types), requires_grad=True, device="cuda")
+            self.rel_graph = torch.zeros(self.rel_graph_shape, requires_grad=True, device="cuda")
 #             self.rel_graph = torch.zeros((1, 1, num_nodes-1, edge_types), requires_grad=True, device="cuda")
 #             self.zeros = torch.zeros((1, 1, (num_nodes-1)**2, edge_types), requires_grad=False, device="cuda")
 #             self.all = torch.cat((self.zeros,self.rel_graph),dim=2)
         else:
-            self.rel_graph = torch.zeros((1, 1, num_nodes*(num_nodes-1), edge_types), requires_grad=True)
-#         import pdb;pdb.set_trace()
+            self.rel_graph = torch.zeros(self.rel_graph_shape, requires_grad=True)    
         
         nn.init.xavier_normal_(self.rel_graph)
         
@@ -127,15 +140,13 @@ class MLPDecoder_Causal(nn.Module):
         # NOTE: To exlude one edge type, simply offset range by 1
         for i in range(start_idx, len(self.msg_fc2)):
 #             print('start', i)
-            
+#             import pdb;pdb.set_trace()
             msg = F.relu(self.msg_fc1[i](pre_msg))
             msg = F.dropout(msg, p=self.dropout_prob)
             msg = F.relu(self.msg_fc2[i](msg))
             #single_timestep_rel_type bs, pred_steps, #node*(#node-1), #edge_type
             #msg bs, pred_steps, #node*(#node-1), self.msg_out_shape=256
-#             msg = msg * single_timestep_rel_type[:, :, :, i:i + 1]
-
-            msg = msg * self.rel_graph[:, :, :, i:i + 1]
+            msg = msg * single_timestep_rel_type[:, :, :, i:i + 1]
             all_msgs += msg
             
 
@@ -199,4 +210,4 @@ class MLPDecoder_Causal(nn.Module):
         pred_all = output[:, :(inputs.size(1) - 1), :, :]
 
         return pred_all.transpose(1, 2).contiguous(), \
-    self.rel_graph.squeeze(1).expand([inputs.size(0), self.num_nodes*(self.num_nodes-1), self.edge_types])
+    self.rel_graph.squeeze(1).expand([inputs.size(0), self.rel_graph_shape[2], self.edge_types])
