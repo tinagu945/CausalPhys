@@ -9,8 +9,6 @@ import datetime
 
 import torch.optim as optim
 from torch.optim import lr_scheduler
-from torch.utils.tensorboard import SummaryWriter
-
 
 from utils import *
 from modules_causal_vel import *
@@ -19,7 +17,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='Disables CUDA training.')
 parser.add_argument('--seed', type=int, default=42, help='Random seed.')
-parser.add_argument('--epochs', type=int, default=700,
+parser.add_argument('--epochs', type=int, default=500,
                     help='Number of epochs to train.')
 parser.add_argument('--batch-size', type=int, default=128,
                     help='Number of samples per batch.')
@@ -56,9 +54,9 @@ parser.add_argument('--dims', type=int, default=8,
                     help='The number of input dimensions (position + velocity).')
 parser.add_argument('--timesteps', type=int, default=19,
                     help='The number of time steps per sample.')
-parser.add_argument('--prediction-steps', type=int, default=10, metavar='N',
+parser.add_argument('--prediction-steps', type=int, default=5, metavar='N',
                     help='Num steps to predict before re-using teacher forcing.')
-parser.add_argument('--lr-decay', type=int, default=40,
+parser.add_argument('--lr-decay', type=int, default=20,
                     help='After how epochs to decay LR by a factor of gamma.')
 parser.add_argument('--gamma', type=float, default=0.5,
                     help='LR decay factor.')
@@ -84,7 +82,6 @@ args.cuda = not args.no_cuda and torch.cuda.is_available()
 args.factor = not args.no_factor
 print(args)
 
-
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 if args.cuda:
@@ -99,8 +96,7 @@ if args.save_folder:
     now = datetime.datetime.now()
     timestamp = now.isoformat()
     save_folder = '{}/exp{}/'.format(args.save_folder, timestamp)
-    args.val_writer = SummaryWriter(save_folder)
-#     os.mkdir(save_folder)
+    os.mkdir(save_folder)
     meta_file = os.path.join(save_folder, 'metadata.pkl')
     encoder_file = os.path.join(save_folder, 'encoder.pt')
     decoder_file = os.path.join(save_folder, 'decoder.pt')
@@ -108,7 +104,7 @@ if args.save_folder:
     log_file = os.path.join(save_folder, 'log.txt')
     log = open(log_file, 'w')
 
-#     pickle.dump({'args': args}, open(meta_file, "wb"))
+    pickle.dump({'args': args}, open(meta_file, "wb"))
 else:
     print("WARNING: No save_folder provided!" +
           "Testing (within this script) will throw an error.")
@@ -161,7 +157,7 @@ triu_indices = get_triu_offdiag_indices(args.num_atoms)
 tril_indices = get_tril_offdiag_indices(args.num_atoms)
 
 if args.prior:
-    prior = np.array([0.9, 0.1])  # TODO: hard coded for now
+    prior = np.array([0.7, 0.3])  # TODO: hard coded for now
     print("Using prior")
     print(prior)
     log_prior = torch.FloatTensor(np.log(prior))
@@ -200,7 +196,8 @@ def train(epoch, best_val_loss):
             data, relations = data.cuda(), relations.cuda()
 
 #         logits = encoder(data, rel_rec, rel_send)
-#         edges = gumbel_softmax(logits, tau=args.temp, hard=args.hard)     
+#         edges = gumbel_softmax(logits, tau=args.temp, hard=args.hard)
+#         
 
         if args.decoder == 'rnn':
             output = decoder(data, edges, rel_rec, rel_send, 100,
@@ -215,19 +212,18 @@ def train(epoch, best_val_loss):
         target = data[:, :, 1:, :] 
         loss_nll = nll_gaussian(output, target, args.var)
 
-        if args.prior:
-#             import pdb;pdb.set_trace()
-            loss_kl = kl_categorical(prob, log_prior, args.num_atoms)
-        else:
-            loss_kl = kl_categorical_uniform(prob, args.num_atoms,
-                                             args.edge_types)
+#         if args.prior:        
+#             loss_kl = kl_categorical(prob, log_prior, args.num_atoms)
+#         else:
+#             loss_kl = kl_categorical_uniform(prob, args.num_atoms,
+#                                              args.edge_types)
+            
+
+        loss_kl = decoder.rel_graph.softmax(-1)[:,:,:,-1].sum()
         loss_kl *= args.kl
         loss = loss_nll +loss_kl
         if batch_idx <5:
-            a= nll_gaussian(output[:,-1,:,:], target[:,-1,:,:], args.var)
-            b= nll_gaussian(output[:,-2,:,:], target[:,-2,:,:], args.var)
-            c= nll_gaussian(output[:,-3,:,:], target[:,-3,:,:], args.var)
-            print(loss_nll, loss_kl,a,b,c)
+            print(loss_nll, loss_kl)
         acc = edge_accuracy(logits, relations)
         acc_train.append(acc)
 
@@ -235,7 +231,7 @@ def train(epoch, best_val_loss):
         loss.backward()    
 #         print(decoder.rel_graph.grad)
         optimizer.step()
-#         import pdb;pdb.set_trace()
+    
         mse_train.append(F.mse_loss(output, target).item())
         nll_train.append(loss_nll.item())
         kl_train.append(loss_kl.item())
@@ -244,7 +240,7 @@ def train(epoch, best_val_loss):
         rel_graphs_grad.append(decoder.rel_graph.grad.detach().cpu().numpy())
 
 #     
-    print(epoch, decoder.rel_graph.softmax(-1), decoder.rel_graph.size()) 
+    print(decoder.rel_graph.softmax(-1), decoder.rel_graph.size()) 
     if epoch % 10==0:
         torch.save(decoder.state_dict(), os.path.join(save_folder, str(epoch)+'_decoder.pt'))
         np.save(os.path.join(save_folder, str(epoch)+'_rel_graph.npy'), np.array(rel_graphs))
@@ -254,9 +250,6 @@ def train(epoch, best_val_loss):
     acc_val = []
     kl_val = []
     mse_val = []
-    a_val =[]
-    b_val=[]
-    c_val=[]
 
     decoder.eval()
     for batch_idx, (data, relations) in enumerate(valid_loader):
@@ -274,10 +267,6 @@ def train(epoch, best_val_loss):
 
         target = data[:, :, 1:, :] 
         loss_nll = nll_gaussian(output, target, args.var)
-        a= nll_gaussian(output[:,-1,:,:], target[:,-1,:,:], args.var)
-        b= nll_gaussian(output[:,-2,:,:], target[:,-2,:,:], args.var)
-        c= nll_gaussian(output[:,-3,:,:], target[:,-3,:,:], args.var)
-            
         if args.prior:
             loss_kl = kl_categorical(prob, log_prior, args.num_atoms)
         else:
@@ -291,41 +280,19 @@ def train(epoch, best_val_loss):
         mse_val.append(F.mse_loss(output, target).item())
         nll_val.append(loss_nll.item())
         kl_val.append(loss_kl.item())
-        a_val.append(a.item())
-        b_val.append(b.item())
-        c_val.append(c.item())
         
 #     import pdb;pdb.set_trace()
-#     print('Epoch: {:04d}'.format(epoch),
-#           'nll_train: {:.10f}'.format(np.mean(nll_train)),
-#           'kl_train: {:.10f}'.format(np.mean(kl_train)),
-#           'mse_train: {:.10f}'.format(np.mean(mse_train)),
-#           'acc_train: {:.10f}'.format(np.mean(acc_train)),
-#           'nll_val: {:.10f}'.format(np.mean(nll_val)),
-#           'a_val: {:.10f}'.format(np.mean(a_val)),
-#           'b_val: {:.10f}'.format(np.mean(b_val)),
-#           'c_val: {:.10f}'.format(np.mean(c_val)),
-#           'kl_val: {:.10f}'.format(np.mean(kl_val)),
-#           'mse_val: {:.10f}'.format(np.mean(mse_val)),
-#           'acc_val: {:.10f}'.format(np.mean(acc_val)),
-#           'time: {:.4f}s'.format(time.time() - t), 
-#           'lr: {:.6f}'.format(scheduler.get_lr()[0]), file=log)
-    args.val_writer.add_scalar('nll_train',np.mean(nll_train), global_epoch) 
-    args.val_writer.add_scalar('kl_train',np.mean(kl_train), global_epoch) 
-    args.val_writer.add_scalar('mse_train',np.mean(mse_train), global_epoch) 
-    args.val_writer.add_scalar('acc_train',np.mean(acc_train), global_epoch) 
-    args.val_writer.add_scalar('nll_val',np.mean(nll_val), global_epoch) 
-    args.val_writer.add_scalar('-1_val',np.mean(a_val), global_epoch)
-    args.val_writer.add_scalar('-2_val',np.mean(b_val), global_epoch)
-    args.val_writer.add_scalar('-3_val',np.mean(c_val), global_epoch)
-    args.val_writer.add_scalar('kl_val',np.mean(kl_val), global_epoch) 
-    args.val_writer.add_scalar('mse_val',np.mean(mse_val), global_epoch) 
-    args.val_writer.add_scalar('acc_val',np.mean(acc_val), global_epoch) 
-    args.val_writer.add_scalar('lr',scheduler.get_lr()[0], global_epoch) 
-    
-    
-    
-    
+    print('Epoch: {:04d}'.format(epoch),
+          'nll_train: {:.10f}'.format(np.mean(nll_train)),
+          'kl_train: {:.10f}'.format(np.mean(kl_train)),
+          'mse_train: {:.10f}'.format(np.mean(mse_train)),
+          'acc_train: {:.10f}'.format(np.mean(acc_train)),
+          'nll_val: {:.10f}'.format(np.mean(nll_val)),
+          'kl_val: {:.10f}'.format(np.mean(kl_val)),
+          'mse_val: {:.10f}'.format(np.mean(mse_val)),
+          'acc_val: {:.10f}'.format(np.mean(acc_val)),
+          'time: {:.4f}s'.format(time.time() - t), 
+          'lr: {:.6f}'.format(scheduler.get_lr()[0]), file=log)
     if args.save_folder and np.mean(nll_val) < best_val_loss:
         torch.save([decoder.state_dict(), decoder.rel_graph], decoder_file)
         print('Best model so far, saving...', file=log)
@@ -335,9 +302,6 @@ def train(epoch, best_val_loss):
               'mse_train: {:.10f}'.format(np.mean(mse_train)),
               'acc_train: {:.10f}'.format(np.mean(acc_train)),
               'nll_val: {:.10f}'.format(np.mean(nll_val)),
-              'a_val: {:.10f}'.format(np.mean(a_val)),
-              'b_val: {:.10f}'.format(np.mean(b_val)),
-              'c_val: {:.10f}'.format(np.mean(c_val)),
               'kl_val: {:.10f}'.format(np.mean(kl_val)),
               'mse_val: {:.10f}'.format(np.mean(mse_val)),
               'acc_val: {:.10f}'.format(np.mean(acc_val)),
@@ -360,7 +324,7 @@ def test():
         if args.cuda:
             data, relations = data.cuda(), relations.cuda()
 
-#         assert (data.size(2) - args.timesteps) >= args.timesteps
+        assert (data.size(2) - args.timesteps) >= args.timesteps
 
 #         data_encoder = data[:, :, :args.timesteps, :].contiguous()
         data_decoder = data[:, :, -args.timesteps:, :].contiguous()
@@ -437,17 +401,12 @@ def test():
 t_total = time.time()
 best_val_loss = np.inf
 best_epoch = 0
-global global_epoch
-global_epoch=0
-
-
 for epoch in range(args.epochs):
     val_loss = train(epoch, best_val_loss)
     scheduler.step()
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         best_epoch = epoch
-    global_epoch +=1
 print("Optimization Finished!")
 print("Best Epoch: {:04d}".format(best_epoch))
 if args.save_folder:

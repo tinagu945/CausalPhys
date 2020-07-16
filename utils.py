@@ -193,14 +193,15 @@ def load_data(batch_size=1, suffix=''):
 
 
 def load_my_data(batch_size=1, suffix='_my', self_loop=False):
-    feat_train = np.load('data/feat_train' + suffix + '.npy')
-    edges_train = np.load('data/edges_train' + suffix + '.npy')
+    feat_train = np.load('data/feat_train' + suffix + '.npy')[:100000]
+    edges_train = np.load('data/edges_train' + suffix + '.npy')[:100000]
 
-    feat_valid = np.load('data/feat_valid' + suffix + '.npy')
-    edges_valid = np.load('data/edges_valid' + suffix + '.npy')
+    feat_valid = np.load('data/feat_valid' + suffix + '.npy')[:5000]
+    edges_valid = np.load('data/edges_valid' + suffix + '.npy')[:5000]
 
-    feat_test = np.load('data/feat_test' + suffix + '.npy')
-    edges_test = np.load('data/edges_test' + suffix + '.npy')
+    feat_test = np.load('data/feat_test' + suffix + '.npy')[:5000]
+    edges_test = np.load('data/edges_test' + suffix + '.npy')[:5000]
+    print(feat_train.shape, feat_test.shape)
 
     # [num_samples, num_timesteps, num_dims, num_atoms]
     num_atoms = feat_train.shape[1]

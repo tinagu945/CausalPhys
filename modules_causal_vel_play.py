@@ -87,7 +87,7 @@ class MLPDecoder_Causal(nn.Module):
 #         for i in range(0,num_nodes*(num_nodes-1)+1, num_nodes-1):
 #             self.rel_graph[:,:,i,:]=random.random()
    
-            
+        # 2x since concat of receive and send
         self.msg_fc1 = nn.ModuleList(
             [nn.Linear(2 * n_in_node, msg_hid) for _ in range(edge_types)])
         self.msg_fc2 = nn.ModuleList(
@@ -128,23 +128,29 @@ class MLPDecoder_Causal(nn.Module):
             start_idx = 1
         else:
             start_idx = 0
+            
+
+#         test=torch.zeros((1,1,56,1)).cuda()  51,52,54,55
+#         test[:,:,20,:]=1
+#         test[:,:,27,:]=1
+#         test[:,:,41,:]=1
+#         test[:,:,48,:]=1
 
         # Run separate MLP for every edge type
         # NOTE: To exlude one edge type, simply offset range by 1
         for i in range(start_idx, len(self.msg_fc2)):
 #             print('start', i)
-#           CHANGED ORDER OF BELOW!
-#             pre_msg = pre_msg * single_timestep_rel_type[:, :, :, i:i + 1]
 #             import pdb;pdb.set_trace()
             msg = F.relu(self.msg_fc1[i](pre_msg))
             msg = F.dropout(msg, p=self.dropout_prob)
             msg = F.relu(self.msg_fc2[i](msg))
             #single_timestep_rel_type bs, pred_steps, #node*(#node-1), #edge_type
             #msg bs, pred_steps, #node*(#node-1), self.msg_out_shape=256
-            msg = msg * single_timestep_rel_type[:, :, :, i:i + 1]
+#             msg = msg * single_timestep_rel_type[:, :, :, i:i + 1]
+            msg = msg * self.rel_graph.softmax()[:, :, :, i:i + 1]
             all_msgs += msg
-        
-#         all_msgs[:,:,-8,:]=  all_msgs[:,:,-8,:]*0  
+            
+
         # Aggregate all msgs to receiver
         #agg_msg bs, pred_steps, #node, self.msg_out_shape=256
         agg_msgs = all_msgs.transpose(-2, -1).matmul(rel_rec).transpose(-2, -1)
@@ -159,6 +165,7 @@ class MLPDecoder_Causal(nn.Module):
         pred = F.dropout(F.relu(self.out_fc2(pred)), p=self.dropout_prob)
         #in:256, out:1
         pred = self.out_fc3(pred)
+#         import pdb; pdb.set_trace()
 
         # Predict position/velocity difference
         return single_timestep_inputs + pred
