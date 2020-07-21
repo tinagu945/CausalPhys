@@ -5,7 +5,7 @@ import math
 import random
 
 from torch.autograd import Variable
-from utils import my_softmax, get_offdiag_indices, gumbel_softmax
+from utils.functions import my_softmax, get_offdiag_indices, gumbel_softmax
 
 _EPS = 1e-10
 

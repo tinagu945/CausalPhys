@@ -8,6 +8,7 @@ import datetime
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import DataLoader
 
 from utils.functions import *
 from models.modules_causal_vel import *
@@ -17,7 +18,8 @@ from test import test_control
 from utils.logger import Logger
 from envs.rollout_func import rollout_sliding_cube
 from data.AL_sampler import MaximalEntropySimulatorSampler
-from models.oracle import ControlOracle
+from data.simulator import ControlSimulator
+from data.AL_dataset import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--cuda', action='store_true', default=True,
@@ -35,7 +37,7 @@ parser.add_argument('--decoder-hidden', type=int, default=256,
                     help='Number of hidden units.')
 parser.add_argument('--temp', type=float, default=0.5,
                     help='Temperature for Gumbel softmax.')
-parser.add_argument('--num-atoms', type=int, default=7,
+parser.add_argument('--input-atoms', type=int, default=6,
                     help='Number of atoms in simulation.')
 parser.add_argument('--suffix', type=str, default='_causal_vel_nohot',
                     help='Suffix for training data (e.g. "_charged".')
@@ -71,11 +73,14 @@ parser.add_argument('--kl', type=float, default=1,
                     help='Whether to include kl as loss.')
 parser.add_argument('--variations', type=int, default=5,
                     help='#values for one controlled var.')
+parser.add_argument('--target-atoms', type=int, default=2,
+                    help='#atoms for results.')
 parser.add_argument('--comment', type=str, default='',
                     help='Additional info for the run.')
 parser.add_argument('--dataset_size', nargs='+', help='#datapoints for train, val and test', required=True)
 
 args = parser.parse_args()
+args.num_atoms = args.input_atoms+args.target_atoms
 print(args)
 
 
@@ -85,10 +90,11 @@ if args.cuda:
     torch.cuda.manual_seed(args.seed)
 
 # Save model and meta-data. Always saves in a new sub-folder.
-
+now = datetime.datetime.now()
 timestamp = now.isoformat()
 save_folder = '{}/exp{}/'.format(args.save_folder, timestamp)
-meta_file = open(os.path.join((save_folder, 'meta.txt')),'r')
+os.mkdir(save_folder)
+meta_file = open(os.path.join(save_folder, 'meta.txt'),'w')
 print(args, file=meta_file)
 meta_file.flush()
 
@@ -143,31 +149,34 @@ def main():
                                 total_size=args.dataset_size,suffix=args.suffix)
                                                        
     func = rollout_sliding_cube
-    simulator = ControlOracle(func, trajectory_len, args.num_nodes, low=0, high=100, \
-                 control_low=20, control_high=50)
+    simulator = ControlSimulator(func, trajectory_len, args.input_atoms, args.target_atoms, \
+                                 low=0, high=10, control_low=20, control_high=50)
     uncertain_sampler = MaximalEntropySimulatorSampler(simulator)
-    random_sampler = RandomSimulatorSampler(simulator)
+#     random_sampler = RandomSimulatorSampler(simulator)
     
     logger = Logger(save_folder)
     
-    for epoch in range(args.epochs):
-        
+    for epoch in range(args.epochs): 
         if epoch == 0: 
             data=[]
             nodes=[]
-            for i in range(args.num_nodes):
-                new_data, uncertain_nodes = sampler.sample(control_node, args.batch_size)
+            for i in range(args.input_atoms):
+                new_data, uncertain_nodes = uncertain_sampler.sample(i, args.batch_size)
                 data.append(new_data)
                 nodes.append(uncertain_nodes)
+            
+            data = torch.cat(data)
+            nodes = torch.cat(nodes)
+            
             train_dataset = ALDataset(data, nodes)
-            train_loader = Dataloader(train_dataset, batch_size = args.batch_size, shuffle=False)
+            train_loader = DataLoader(train_dataset, batch_size = args.batch_size, shuffle=False)
         else:
-            control_node = sampler.criterion(decoder.rel_graph)
-            new_data, uncertain_nodes = sampler.sample(control_node, args.batch_size) 
-            train_dataset, train_loader = update_AL_dataset(train_dataset, new_data, uncertain_nodes)   
+            control_node = uncertain_sampler.criterion(decoder.rel_graph)
+            new_data, uncertain_nodes = uncertain_sampler.sample(control_node, args.batch_size) 
+            train_dataset, train_loader = update_ALDataset(train_dataset, new_data, uncertain_nodes, args.batch_size)   
     
         train_control(args, logger, optimizer, save_folder, train_loader, epoch, decoder, \
-                       rel_rec, rel_send, mask_grad=False)
+                       rel_rec, rel_send, mask_grad=True)
         nll_val_loss = val_control(args, logger, save_folder, valid_loader, epoch, decoder, rel_rec, rel_send)
         
         scheduler.step()
@@ -182,7 +191,7 @@ def main():
         print("Best Epoch: {:04d}".format(best_epoch), file=log)
         log.flush()
 
-    test(test_loader)
+    test_control(test_loader)
     if log is not None:
         print(save_folder)
         log.close()

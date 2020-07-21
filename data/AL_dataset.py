@@ -1,4 +1,6 @@
-from torch.utils.data import Dataset
+import torch
+import numpy as np
+from torch.utils.data import Dataset, TensorDataset, DataLoader
 
 
 #TODO: make edges save space for AL and other scripts. Best would be only one copy of edge for all trajectories.
@@ -35,6 +37,15 @@ class ALDataset(Dataset):
     def __init__(self, data, nodes):
         self.nodes = nodes
         self.data = data
+        
+        # Normalize to [-1, 1]
+        num_atoms = data.size(1)
+        for i in range(num_atoms):
+            #TODO: should one-hot dimension be normalzed?
+            max_val =  self.data[:,i,:,:].max()   
+            min_val =  self.data[:,i,:,:].min()      
+            print('raw data each dimension max and min: ', i, max_val, min_val)
+            self.data[:,i,:,:] = (self.data[:,i,:,:] - min_val)*2/(max_val-min_val)-1
 
     def __len__(self):
         return self.data.shape[0]
@@ -46,8 +57,9 @@ class ALDataset(Dataset):
 def update_ALDataset(dataset, new_data, which_nodes, batch_size):
     """return: A new dataloader from a new dataset"""
     assert isinstance(dataset, ALDataset)
-    data = torch.cat((dataset.data, new_data), dim=-1)
-    nodes = torch.cat((dataset.nodes, which_nodes), dim=-1)
+    data = torch.cat((dataset.data, new_data), dim=0)
+    nodes = torch.cat((dataset.nodes, which_nodes), dim=0)
+#     import pdb;pdb.set_trace()
     new_ds = ALDataset(data, nodes)
     new_dataloader = DataLoader(new_ds, batch_size=batch_size, shuffle=False)
     return new_ds, new_dataloader            
@@ -70,20 +82,17 @@ class OneGraphDataset(Dataset):
 
 def load_AL_data(batch_size=1, suffix='_my', self_loop=False, total_size=None):
     """Only returns dataloaders for valid and test"""
-    feat_valid = np.load('data/feat_valid' + suffix + '.npy')[:int(total_size[1])]
-    edges_valid = np.load('data/edges_valid' + suffix + '.npy')[0]
+    feat_valid = np.load('data/datasets/feat_valid' + suffix + '.npy')[:int(total_size[1])]
+    edges_valid = np.load('data/datasets/edges_valid' + suffix + '.npy')[0]
 
-    feat_test = np.load('data/feat_test' + suffix + '.npy')[:int(total_size[2])]
-    edges_test = np.load('data/edges_test' + suffix + '.npy')[0]
-    print(feat_train.shape, feat_test.shape)
+    feat_test = np.load('data/datasets/feat_test' + suffix + '.npy')[:int(total_size[2])]
+    edges_test = np.load('data/datasets/edges_test' + suffix + '.npy')[0]
+    print(feat_valid.shape, feat_test.shape)
 
     # [num_samples, num_timesteps, num_dims, num_atoms]
-    num_atoms = feat_train.shape[1]
+    num_atoms = feat_valid.shape[1]
 
-    for i in range(0, feat_train.shape[1]):
-#         print(i, np.max(feat_train[:,i,:,:]), np.min(feat_train[:,i,:,:]))
-        feat_train[:,i,:,:] = (feat_train[:,i,:,:] - np.min(feat_train[:,i,:,:]))*2/\
-        (np.max(feat_train[:,i,:,:])-np.min(feat_train[:,i,:,:]))-1
+    for i in range(0, num_atoms):
 #         print(i, np.max(feat_valid[:,i,:,:]), np.min(feat_valid[:,i,:,:]))
         feat_valid[:,i,:,:] = (feat_valid[:,i,:,:] - np.min(feat_valid[:,i,:,:]))*2/\
         (np.max(feat_valid[:,i,:,:])-np.min(feat_valid[:,i,:,:]))-1
@@ -92,17 +101,12 @@ def load_AL_data(batch_size=1, suffix='_my', self_loop=False, total_size=None):
         (np.max(feat_test[:,i,:,:])-np.min(feat_test[:,i,:,:]))-1
 
     # Reshape to: [num_sims, num_atoms, num_timesteps, num_dims]
-    edges_train = np.reshape(edges_train, [-1, num_atoms ** 2])
-    edges_train = np.array((edges_train + 1) / 2, dtype=np.int64)
-
     edges_valid = np.reshape(edges_valid, [-1, num_atoms ** 2])
     edges_valid = np.array((edges_valid + 1) / 2, dtype=np.int64)
 
     edges_test = np.reshape(edges_test, [-1, num_atoms ** 2])
     edges_test = np.array((edges_test + 1) / 2, dtype=np.int64)
 
-    feat_train = torch.FloatTensor(feat_train)
-    edges_train = torch.LongTensor(edges_train)
     feat_valid = torch.FloatTensor(feat_valid)
     edges_valid = torch.LongTensor(edges_valid)
     feat_test = torch.FloatTensor(feat_test)
@@ -117,7 +121,6 @@ def load_AL_data(batch_size=1, suffix='_my', self_loop=False, total_size=None):
         off_diag_idx = np.ravel_multi_index(
             np.where(np.ones((num_atoms, num_atoms))),
             [num_atoms, num_atoms])
-    edges_train = edges_train[:, off_diag_idx]
     edges_valid = edges_valid[:, off_diag_idx]
     edges_test = edges_test[:, off_diag_idx]
 

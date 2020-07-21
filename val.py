@@ -11,7 +11,8 @@ def val_control(args, logger, save_folder, valid_loader, epoch, decoder, rel_rec
     c_val=[]
 
     decoder.eval()
-    for batch_idx, data in enumerate(valid_loader):
+    for batch_idx, (data, edges) in enumerate(valid_loader):
+#         import pdb;pdb.set_trace()
         if args.cuda:
             data = data.cuda()
 
@@ -39,6 +40,6 @@ def val_control(args, logger, save_folder, valid_loader, epoch, decoder, rel_rec
         b_val.append(b.item())
         c_val.append(c.item())
         
-        logger.log('val', decoder, epoch, nll_val, kl_val, mse_val, a=a_val, b=b_val, c=c_val)
+    logger.log('val', decoder, epoch, nll_val, kl_val, mse_val, a=a_val, b=b_val, c=c_val)
 
     return np.mean(nll_val)

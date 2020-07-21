@@ -1,4 +1,4 @@
-def test(test_loader):
+def test_control(test_loader):
     acc_test = []
     nll_test = []
     kl_test = []

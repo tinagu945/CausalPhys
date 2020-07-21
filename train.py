@@ -1,14 +1,18 @@
 import time
 import torch
 from utils.functions import *
-from logger import Logger 
+from utils.logger import Logger 
 
-def train_control(args, logger, optimizer, save_folder,train_loader, epoch, decoder, rel_rec, rel_send, mask_grad=False):
+def train_control(args, logger, optimizer, save_folder,train_loader, epoch, \
+                  decoder, rel_rec, rel_send, mask_grad=False):
     t = time.time()
     nll_train = []
     acc_train = []
     kl_train = []
     mse_train = []
+    a_train =[]
+    b_train =[]
+    c_train =[]
     
     rel_graphs=[]
     rel_graphs_grad=[]
@@ -33,14 +37,14 @@ def train_control(args, logger, optimizer, save_folder,train_loader, epoch, deco
                                              args.edge_types)
         loss_kl *= args.kl
         loss = loss_nll +loss_kl
-        if batch_idx <5:
-            a= nll_gaussian(output[:,-1,:,:], target[:,-1,:,:], args.var)
-            b= nll_gaussian(output[:,-2,:,:], target[:,-2,:,:], args.var)
-            c= nll_gaussian(output[:,-3,:,:], target[:,-3,:,:], args.var)
-            print(loss_nll, loss_kl,a,b,c)
+
+        a= nll_gaussian(output[:,-1,:,:], target[:,-1,:,:], args.var)
+        b= nll_gaussian(output[:,-2,:,:], target[:,-2,:,:], args.var)
+        c= nll_gaussian(output[:,-3,:,:], target[:,-3,:,:], args.var)
 
         optimizer.zero_grad()
-        loss.backward()    
+        loss.backward()
+        #TODO: hard coded for now!
         if mask_grad:
             mask = torch.zeros(decoder.rel_graph.size(), requires_grad=False, device="cuda")
             mask[:,:,(5-which_node):args.num_atoms**2:args.num_atoms]=1
@@ -52,11 +56,15 @@ def train_control(args, logger, optimizer, save_folder,train_loader, epoch, deco
         mse_train.append(F.mse_loss(output, target).item())
         nll_train.append(loss_nll.item())
         kl_train.append(loss_kl.item())
+        a_train.append(a.item())
+        b_train.append(b.item())
+        c_train.append(c.item())
         
         rel_graphs.append(decoder.rel_graph.detach().cpu().numpy())
         rel_graphs_grad.append(decoder.rel_graph.grad.detach().cpu().numpy())
    
     print(epoch, decoder.rel_graph.softmax(-1), decoder.rel_graph.size()) 
     if epoch % 10==0:
-        logger.log('train', decoder, global_epoch, nll_train, kl_train, mse_train, lr=optimizer.param_groups[0]['lr'])
+        logger.log('train', decoder, epoch, nll_train, kl_train, mse_train,\
+                   a=a_train, b=b_train, c=c_train, lr=optimizer.param_groups[0]['lr'])
         
