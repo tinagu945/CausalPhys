@@ -17,39 +17,64 @@ class ALIndexDataset(Dataset):
         
         return self.data[self.existing_[idx]], self.existing_edges[0], self.existing_nodes[idx]
     
+
+def update_ALIndexDataset(dataset, new_data_idx, which_nodes):
+    """return: A new dataloader from a new dataset"""
+    assert isinstance(dataset, ALIndexDataset)
+    new_idx = torch.cat((dataset.existing_idxs, new_data_idx), dim=-1)
+    new_nodes = torch.cat((dataset.existing_nodes, new_data_idx), dim=-1)
+    new_ds = ALIndexDataset(new_idx, new_nodes, edges)
+    new_dataloader = DataLoader(new_ds, batch_size=variations, shuffle=False)
     
-    
-    
+    return new_ds, new_dataloader    
+
+
+
+
 class ALDataset(Dataset):
-    def __init__(self, existing_data, new_data, existing_nodes, which_nodes):
-        self.existing_nodes = existing_nodes.append(which_nodes, axis=-1)
-        self.existing_data = existing_data.append(new_data, axis=-1)
+    def __init__(self, data, nodes):
+        self.nodes = nodes
+        self.data = data
 
     def __len__(self):
         return self.data.shape[0]
 
     def __getitem__(self, idx):   
-        return self.data[idx], self.existing_nodes[idx]
+        return self.data[idx], self.nodes[idx]
+      
     
-        
-def update_ALDataset(new_data_idx, which_nodes, dataset):
+def update_ALDataset(dataset, new_data, which_nodes, batch_size):
     """return: A new dataloader from a new dataset"""
-    new_idx = torch.concat(dataset.existing_idxs, new_data_idx)
-    new_nodes = torch.concat(dataset.existing_nodes, new_data_idx)
-    new_ds = ALDataset(new_idx, new_nodes, edges)
-    new_dataloader = DataLoader(new_ds, batch_size=variations, shuffle=False)
+    assert isinstance(dataset, ALDataset)
+    data = torch.cat((dataset.data, new_data), dim=-1)
+    nodes = torch.cat((dataset.nodes, which_nodes), dim=-1)
+    new_ds = ALDataset(data, nodes)
+    new_dataloader = DataLoader(new_ds, batch_size=batch_size, shuffle=False)
+    return new_ds, new_dataloader            
+
+
+
+class OneGraphDataset(Dataset):
+    """One graph for all trajectories. Memory efficient."""
+    def __init__(self, data, edge):
+        self.edge = edge
+        self.data = data
+
+    def __len__(self):
+        return self.data.shape[0]
+
+    def __getitem__(self, idx):   
+        return self.data[idx], self.edge
     
-    return new_ds, new_dataloader
-
-
-
-
     
-def load_AL_data(batch_size=1, suffix='_my', self_loop=False, total_size=None, control=False, \
-                 control_nodes=None, variations=4):
-    feat_train = np.load('data/feat_train' + suffix + '.npy')[:int(total_size[0])]
+
+def load_AL_data(batch_size=1, suffix='_my', self_loop=False, total_size=None):
+    """Only returns dataloaders for valid and test"""
     feat_valid = np.load('data/feat_valid' + suffix + '.npy')[:int(total_size[1])]
+    edges_valid = np.load('data/edges_valid' + suffix + '.npy')[0]
+
     feat_test = np.load('data/feat_test' + suffix + '.npy')[:int(total_size[2])]
+    edges_test = np.load('data/edges_test' + suffix + '.npy')[0]
     print(feat_train.shape, feat_test.shape)
 
     # [num_samples, num_timesteps, num_dims, num_atoms]
@@ -66,10 +91,22 @@ def load_AL_data(batch_size=1, suffix='_my', self_loop=False, total_size=None, c
         feat_test[:,i,:,:] = (feat_test[:,i,:,:] - np.min(feat_test[:,i,:,:]))*2/\
         (np.max(feat_test[:,i,:,:])-np.min(feat_test[:,i,:,:]))-1
 
+    # Reshape to: [num_sims, num_atoms, num_timesteps, num_dims]
+    edges_train = np.reshape(edges_train, [-1, num_atoms ** 2])
+    edges_train = np.array((edges_train + 1) / 2, dtype=np.int64)
+
+    edges_valid = np.reshape(edges_valid, [-1, num_atoms ** 2])
+    edges_valid = np.array((edges_valid + 1) / 2, dtype=np.int64)
+
+    edges_test = np.reshape(edges_test, [-1, num_atoms ** 2])
+    edges_test = np.array((edges_test + 1) / 2, dtype=np.int64)
 
     feat_train = torch.FloatTensor(feat_train)
+    edges_train = torch.LongTensor(edges_train)
     feat_valid = torch.FloatTensor(feat_valid)
+    edges_valid = torch.LongTensor(edges_valid)
     feat_test = torch.FloatTensor(feat_test)
+    edges_test = torch.LongTensor(edges_test)
 
     # Exclude self edges
     if not self_loop:
@@ -80,21 +117,17 @@ def load_AL_data(batch_size=1, suffix='_my', self_loop=False, total_size=None, c
         off_diag_idx = np.ravel_multi_index(
             np.where(np.ones((num_atoms, num_atoms))),
             [num_atoms, num_atoms])
+    edges_train = edges_train[:, off_diag_idx]
+    edges_valid = edges_valid[:, off_diag_idx]
+    edges_test = edges_test[:, off_diag_idx]
 
-    if not control:
-        train_data = TensorDataset(feat_train)
-        train_data_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-    else:
-        train_data = ControlDataset(feat_train, control_nodes=control_nodes, variations=variations)
-        train_data_loader = DataLoader(train_data, batch_size=variations, shuffle=False)
-    
-#     import pdb;pdb.set_trace()
-    valid_data = TensorDataset(feat_valid)
-    test_data = TensorDataset(feat_test)
+    valid_data = OneGraphDataset(feat_valid, edges_valid)
+    test_data = OneGraphDataset(feat_test, edges_test)
     valid_data_loader = DataLoader(valid_data, batch_size=batch_size, shuffle=True)
     test_data_loader = DataLoader(test_data, batch_size=batch_size, shuffle=True)
 
-    return train_data_loader, valid_data_loader, test_data_loader
+    return valid_data_loader, test_data_loader
+
 
 
 

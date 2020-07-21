@@ -1,5 +1,7 @@
+import time
 import torch
-from utils import *
+from utils.functions import *
+from logger import Logger 
 
 def train_control(args, logger, optimizer, save_folder,train_loader, epoch, decoder, rel_rec, rel_send, mask_grad=False):
     t = time.time()
@@ -56,5 +58,5 @@ def train_control(args, logger, optimizer, save_folder,train_loader, epoch, deco
    
     print(epoch, decoder.rel_graph.softmax(-1), decoder.rel_graph.size()) 
     if epoch % 10==0:
-        logger.log('train')
+        logger.log('train', decoder, global_epoch, nll_train, kl_train, mse_train, lr=optimizer.param_groups[0]['lr'])
         

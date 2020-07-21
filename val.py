@@ -1,7 +1,7 @@
+from utils.logger import Logger
+from utils.functions import *
 
-
-
-def val(valid_loader):
+def val_control(args, logger, save_folder, valid_loader, epoch, decoder, rel_rec, rel_send):
     nll_val = []
     acc_val = []
     kl_val = []
@@ -39,48 +39,6 @@ def val(valid_loader):
         b_val.append(b.item())
         c_val.append(c.item())
         
-#     import pdb;pdb.set_trace()
-#     print('Epoch: {:04d}'.format(epoch),
-#           'nll_train: {:.10f}'.format(np.mean(nll_train)),
-#           'kl_train: {:.10f}'.format(np.mean(kl_train)),
-#           'mse_train: {:.10f}'.format(np.mean(mse_train)),
-#           'acc_train: {:.10f}'.format(np.mean(acc_train)),
-#           'nll_val: {:.10f}'.format(np.mean(nll_val)),
-#           'a_val: {:.10f}'.format(np.mean(a_val)),
-#           'b_val: {:.10f}'.format(np.mean(b_val)),
-#           'c_val: {:.10f}'.format(np.mean(c_val)),
-#           'kl_val: {:.10f}'.format(np.mean(kl_val)),
-#           'mse_val: {:.10f}'.format(np.mean(mse_val)),
-#           'acc_val: {:.10f}'.format(np.mean(acc_val)),
-#           'time: {:.4f}s'.format(time.time() - t), 
-#           'lr: {:.6f}'.format(scheduler.get_lr()[0]), file=log)
-    args.val_writer.add_scalar('nll_train',np.mean(nll_train), global_epoch) 
-    args.val_writer.add_scalar('kl_train',np.mean(kl_train), global_epoch) 
-    args.val_writer.add_scalar('mse_train',np.mean(mse_train), global_epoch) 
-    args.val_writer.add_scalar('nll_val',np.mean(nll_val), global_epoch) 
-    args.val_writer.add_scalar('-1_val',np.mean(a_val), global_epoch)
-    args.val_writer.add_scalar('-2_val',np.mean(b_val), global_epoch)
-    args.val_writer.add_scalar('-3_val',np.mean(c_val), global_epoch)
-    args.val_writer.add_scalar('kl_val',np.mean(kl_val), global_epoch) 
-    args.val_writer.add_scalar('mse_val',np.mean(mse_val), global_epoch) 
-    args.val_writer.add_scalar('lr',scheduler.get_lr()[0], global_epoch) 
-    
-    
-    
-    
-    if args.save_folder and np.mean(nll_val) < best_val_loss:
-        torch.save([decoder.state_dict(), decoder.rel_graph], decoder_file)
-        print('Best model so far, saving...', file=log)
-        print('Epoch: {:04d}'.format(epoch),
-              'nll_train: {:.10f}'.format(np.mean(nll_train)),
-              'kl_train: {:.10f}'.format(np.mean(kl_train)),
-              'mse_train: {:.10f}'.format(np.mean(mse_train)),
-              'nll_val: {:.10f}'.format(np.mean(nll_val)),
-              'a_val: {:.10f}'.format(np.mean(a_val)),
-              'b_val: {:.10f}'.format(np.mean(b_val)),
-              'c_val: {:.10f}'.format(np.mean(c_val)),
-              'kl_val: {:.10f}'.format(np.mean(kl_val)),
-              'mse_val: {:.10f}'.format(np.mean(mse_val)),
-              'time: {:.4f}s'.format(time.time() - t), file=log)
-        log.flush()
+        logger.log('val', decoder, epoch, nll_val, kl_val, mse_val, a=a_val, b=b_val, c=c_val)
+
     return np.mean(nll_val)

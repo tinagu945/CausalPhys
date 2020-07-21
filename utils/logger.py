@@ -9,27 +9,24 @@ class Logger(object):
         self.best_val_loss = np.inf
         self.best_epoch = -1
         
-    def log(mode, decoder, epoch, nll, kl, mse, a=None, b=None, c=None, lr=None):
-        self.val_writer.add_scalar('nll_'+mode,np.mean(nll), epoch) 
-        self.val_writer.add_scalar('kl_'+mode, np.mean(kl), epoch) 
-        self.val_writer.add_scalar('mse_'+mode,np.mean(mse), epoch) 
-        if a:
-            self.val_writer.add_scalar('-1_val',np.mean(a), epoch)
-        if b:
-            self.val_writer.add_scalar('-2_val',np.mean(b), epoch)
-        if c:
-            self.val_writer.add_scalar('-3_val',np.mean(c), epoch)    
+    def log(mode, decoder, global_epoch, nll, kl, mse, a, b, c, lr):
+        self.val_writer.add_scalar('nll_'+mode,np.mean(nll), global_epoch) 
+        self.val_writer.add_scalar('kl_'+mode, np.mean(kl), global_epoch) 
+        self.val_writer.add_scalar('mse_'+mode,np.mean(mse), global_epoch) 
+        self.val_writer.add_scalar('-1_val',np.mean(a), global_epoch)
+        self.val_writer.add_scalar('-2_val',np.mean(b), global_epoch)
+        self.val_writer.add_scalar('-3_val',np.mean(v), global_epoch)    
         
         if mode =='train':
-            self.val_writer.add_scalar('lr',lr, epoch) 
+            self.val_writer.add_scalar('lr',scheduler.get_lr()[0], global_epoch) 
             
-            torch.save(decoder.state_dict(), os.path.join(save_folder, str(epoch)+'_decoder.pt'))
-            np.save(os.path.join(save_folder, str(epoch)+'_rel_graph.npy'), np.array(rel_graphs))
-            np.save(os.path.join(save_folder, str(epoch)+'_rel_graph_grad.npy'), np.array(rel_graphs_grad))
+            torch.save(decoder.state_dict(), os.path.join(save_folder, str(global_epoch)+'_decoder.pt'))
+            np.save(os.path.join(save_folder, str(global_epoch)+'_rel_graph.npy'), np.array(rel_graphs))
+            np.save(os.path.join(save_folder, str(global_epoch)+'_rel_graph_grad.npy'), np.array(rel_graphs_grad))
         elif mode =='val':
             if np.mean(nll_val) < best_val_loss:
                 self.best_val_loss = np.mean(nll_val)
-                self.best_epoch = epoch
+                self.best_epoch = global_epoch
                 
                 print('Best model so far, saving...', file)
                 torch.save([decoder.state_dict(), decoder.rel_graph], 'best_decoder.pt')
