@@ -19,7 +19,8 @@ from utils.logger import Logger
 from envs.rollout_func import rollout_sliding_cube
 from data.AL_sampler import MaximalEntropySimulatorSampler
 from data.simulator import ControlSimulator
-from data.AL_dataset import *
+from data.datasets import *
+from data.dataset_utils import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--cuda', action='store_true', default=True,
@@ -143,8 +144,10 @@ def main():
     best_epoch = 0
     trajectory_len=19
     
-    valid_loader, test_loader = load_AL_data(batch_size=args.batch_size,\
-                                total_size=args.dataset_size,suffix=args.suffix)
+    valid_data = load_one_graph_data('val_'+args.suffix, size=args.dataset_size, self_loop=args.self_loop)
+    test_data = load_one_graph_data('test_'+args.suffix, size=args.dataset_size, self_loop=args.self_loop)
+    valid_data_loader = DataLoader(valid_data, batch_size=args.batch_size, shuffle=True)
+    test_data_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
                                                        
     func = rollout_sliding_cube
     simulator = ControlSimulator(func, trajectory_len, args.input_atoms, args.target_atoms, \

@@ -82,10 +82,10 @@ class OneGraphDataset(Dataset):
 
 def load_AL_data(batch_size=1, suffix='_my', self_loop=False, total_size=None):
     """Only returns dataloaders for valid and test"""
-    feat_valid = np.load('data/datasets/feat_valid' + suffix + '.npy')[:int(total_size[1])]
+    feat_valid = np.load('data/datasets/feat_valid' + suffix + '.npy')[:int(total_size[0])]
     edges_valid = np.load('data/datasets/edges_valid' + suffix + '.npy')[0]
 
-    feat_test = np.load('data/datasets/feat_test' + suffix + '.npy')[:int(total_size[2])]
+    feat_test = np.load('data/datasets/feat_test' + suffix + '.npy')[:int(total_size[1])]
     edges_test = np.load('data/datasets/edges_test' + suffix + '.npy')[0]
     print(feat_valid.shape, feat_test.shape)
 

@@ -1,5 +1,6 @@
 import torch
 
+#The #input and #target nodes, physics equation, each nodes' value range, etc. should together be an environment.
 def rollout_sliding_cube(inputs, num_outputs, g=9.8, delta=True, interval=2):
     mu = inputs[:,2,0,0]
     theta=inputs[:,3,0,0] 

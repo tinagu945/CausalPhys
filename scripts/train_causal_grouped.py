@@ -17,17 +17,15 @@ from val import val_control
 from test import test_control
 from utils.logger import Logger
 from envs.rollout_func import rollout_sliding_cube
-from data.AL_sampler import MaximalEntropySimulatorSampler
-from data.simulator import ControlSimulator
-from data.AL_dataset import *
+from data.AL_sampler import RandomPytorchSampler
+from data.datasets import *
+from data.dataset_utils import *
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--cuda', action='store_true', default=True,
-                    help='Enables CUDA training.')
 parser.add_argument('--seed', type=int, default=42, help='Random seed.')
 parser.add_argument('--epochs', type=int, default=1000,
                     help='Number of epochs to train.')
-parser.add_argument('--batch-size', type=int, default=5,
+parser.add_argument('--batch-size', type=int, default=6,
                     help='Number of samples per batch.')
 parser.add_argument('--lr', type=float, default=1e-4,
                     help='Initial learning rate.')
@@ -38,7 +36,7 @@ parser.add_argument('--decoder-hidden', type=int, default=256,
 parser.add_argument('--temp', type=float, default=0.5,
                     help='Temperature for Gumbel softmax.')
 parser.add_argument('--input-atoms', type=int, default=6,
-                    help='Number of atoms in simulation.')
+                    help='Number of atoms need to be controlled in simulation.')
 parser.add_argument('--suffix', type=str, default='_causal_vel_nohot',
                     help='Suffix for training data (e.g. "_charged".')
 parser.add_argument('--encoder-dropout', type=float, default=0.0,
@@ -67,39 +65,49 @@ parser.add_argument('--hard', action='store_true', default=False,
                     help='Uses discrete samples in training forward pass.')
 parser.add_argument('--self-loop', action='store_true', default=True,
                     help='Whether graph contains self loop.')
-parser.add_argument('--kl', type=float, default=1,
+parser.add_argument('--kl', type=float, default=10,
                     help='Whether to include kl as loss.')
-parser.add_argument('--variations', type=int, default=5,
+parser.add_argument('--variations', type=int, default=6,
                     help='#values for one controlled var.')
 parser.add_argument('--target-atoms', type=int, default=2,
                     help='#atoms for results.')
 parser.add_argument('--comment', type=str, default='',
                     help='Additional info for the run.')
-parser.add_argument('--dataset_size', nargs='+', help='#datapoints for train, val and test', required=True)
+parser.add_argument('--train-size', type=int, default=None,
+                    help='#datapoints for train')
+parser.add_argument('--val-size', type=int, default=None,
+                    help='#datapoints for val')
+parser.add_argument('--test-size', type=int, default=None,
+                    help='#datapoints for test')
+parser.add_argument('--grouped', action='store_true', default=False,
+                    help='Whether to group the dataset')
+parser.add_argument('--control-constraint', type=float, default=0.0,
+                    help='Coefficient for control constraint loss')
 
 args = parser.parse_args()
 args.num_atoms = args.input_atoms+args.target_atoms
+args.script = 'train_causal_grouped'
 print(args)
 
 
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
-if args.cuda:
-    torch.cuda.manual_seed(args.seed)
+torch.cuda.manual_seed(args.seed)
 
 # Save model and meta-data. Always saves in a new sub-folder.
 now = datetime.datetime.now()
 timestamp = now.isoformat()
 save_folder = '{}/exp{}/'.format(args.save_folder, timestamp)
 os.mkdir(save_folder)
-meta_file = open(os.path.join(save_folder, 'meta.txt'),'w')
+meta_file = open(os.path.join(save_folder, 'meta.txt'), 'w')
 print(args, file=meta_file)
 meta_file.flush()
 
 if args.self_loop:
     off_diag = np.ones([args.num_atoms, args.num_atoms])
 else:
-    off_diag = np.ones([args.num_atoms, args.num_atoms]) - np.eye(args.num_atoms)
+    off_diag = np.ones([args.num_atoms, args.num_atoms]) - \
+        np.eye(args.num_atoms)
 
 # This is not adjacency matrix since it's 49*7, not 7*7!
 rel_rec = np.array(encode_onehot(np.where(off_diag)[0]), dtype=np.float32)
@@ -125,78 +133,71 @@ log_prior = torch.FloatTensor(np.log(prior))
 log_prior = torch.unsqueeze(log_prior, 0)
 log_prior = torch.unsqueeze(log_prior, 0)
 
-if args.cuda:
-    log_prior = log_prior.cuda()
 
-if args.cuda:
-    decoder.cuda()
-    rel_rec = rel_rec.cuda()
-    rel_send = rel_send.cuda()
-    triu_indices = triu_indices.cuda()
-    tril_indices = tril_indices.cuda()
-    
+log_prior = log_prior.cuda()
+decoder.cuda()
+rel_rec = rel_rec.cuda()
+rel_send = rel_send.cuda()
+triu_indices = triu_indices.cuda()
+tril_indices = tril_indices.cuda()
 
 
 def main():
     # Train model
     best_val_loss = np.inf
     best_epoch = 0
-    trajectory_len=19
-    
-    valid_loader, test_loader = load_AL_data(batch_size=args.batch_size,\
-                                total_size=args.dataset_size,suffix=args.suffix)
-                                                       
-    func = rollout_sliding_cube
-    simulator = ControlSimulator(func, trajectory_len, args.input_atoms, args.target_atoms, \
-                                 low=1, high=3, control_low=0, control_high=5)
-    uncertain_sampler = MaximalEntropySimulatorSampler(simulator)
-#     random_sampler = RandomSimulatorSampler(simulator)
-    
+    trajectory_len = 19
+
+    if args.grouped:
+        train_data = load_one_graph_data(
+            'train_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.variations)
+        train_sampler = RandomPytorchSampler(train_data)
+        # batch_size fixed to be args.variations for grouped dataset
+        train_data_loader = DataLoader(
+            train_data, batch_size=args.variations, shuffle=False, sampler=train_sampler)
+        print('Since the dataset is grouped, training batch_size is fixed at args.variations ', args.variations)
+    else:
+        train_data = load_one_graph_data(
+            'train_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=False)
+        train_data_loader = DataLoader(
+            train_data, batch_size=args.batch_size, shuffle=True)
+
+    valid_data = load_one_graph_data(
+        'valid_'+args.suffix, size=args.val_size, self_loop=args.self_loop)
+    test_data = load_one_graph_data(
+        'test_'+args.suffix, size=args.test_size, self_loop=args.self_loop)
+
+    valid_data_loader = DataLoader(
+        valid_data, batch_size=args.batch_size, shuffle=True)
+    test_data_loader = DataLoader(
+        test_data, batch_size=args.batch_size, shuffle=True)
+
     logger = Logger(save_folder)
-    
-    for epoch in range(args.epochs): 
-        if epoch == 0: 
-            data=[]
-            nodes=[]
-            for i in range(args.input_atoms):
-                new_data, uncertain_nodes = uncertain_sampler.sample(i, args.batch_size)
-                data.append(new_data)
-                nodes.append(uncertain_nodes)
-            
-            data = torch.cat(data)
-            nodes = torch.cat(nodes)
-            
-            train_dataset = ALDataset(data, nodes)
-            train_loader = DataLoader(train_dataset, batch_size = args.batch_size, shuffle=False)
-        else:
-            control_node = uncertain_sampler.criterion(decoder.rel_graph)
-            new_data, uncertain_nodes = uncertain_sampler.sample(control_node, args.batch_size) 
-            train_dataset, train_loader = update_ALDataset(train_dataset, new_data, uncertain_nodes, args.batch_size)   
-#         print(train_dataset.data[:,:,:3,0], train_dataset.nodes)
-        #TODO: when len(train_dataset) reaches budget, force stop
-        print('#batches in train_dataset', len(train_dataset)/args.batch_size)
-        train_control(args, log_prior, logger, optimizer, save_folder, train_loader, epoch, decoder, \
-                       rel_rec, rel_send, mask_grad=True)
-        nll_val_loss = val_control(args, log_prior, logger, save_folder, valid_loader, epoch, decoder, rel_rec, rel_send)
-        
+
+    for epoch in range(args.epochs):
+        # TODO: when len(train_dataset) reaches budget, force stop
+        # print('#batches in train_dataset', len(train_dataset)/args.batch_size)
+        train_control(args, log_prior, logger, optimizer, save_folder,
+                      train_data_loader, epoch, decoder, rel_rec, rel_send)
+        nll_val_loss = val_control(
+            args, log_prior, logger, save_folder, valid_data_loader, epoch, decoder, rel_rec, rel_send)
+
         scheduler.step()
         if nll_val_loss < best_val_loss:
             best_val_loss = nll_val_loss
             best_epoch = epoch
- 
-        
+
     print("Optimization Finished!")
     print("Best Epoch: {:04d}".format(best_epoch))
     if args.save_folder:
         print("Best Epoch: {:04d}".format(best_epoch), file=log)
         log.flush()
 
-    test_control(test_loader)
+    test_control(test_data_loader)
     if log is not None:
         print(save_folder)
         log.close()
-        
 
-        
+
 if __name__ == "__main__":
     main()
