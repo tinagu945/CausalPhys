@@ -7,29 +7,61 @@ from torch.autograd import Variable
 # from data.datasets import ControlOneGraphDataset
 
 
-def control_loss(msg_hook, control_node, input_nodes):
+def control_loss(msg_hook, control_nodes, input_nodes, variations):
     """Similar to the loss in Interpretable Intuitive Physics Model
     Assume the dataset is arranged as input vars first, target vars in the bottom
 
     Args:
         msg_hook (torch.Tensor): shape (time_steps, batch_size, node**2, information_dim)
-        control_node (int): which node to exclude since it's the controlled changing node
+        control_nodes (torch.Tensor): shape (batch_size), which node to exclude since it's the controlled changing node
         input_nodes (int): total number of nodes that need to be controlled.
     """
-
-    mean = msg_hook.mean(dim=1, keepdim=True)
     num_nodes = int(np.sqrt(msg_hook.size(2)))
+    batch_size = control_nodes.size(0)
     # Var same size as msg_hook
+    mean = msg_hook.mean(dim=1, keepdim=True)
     var = (msg_hook-mean)**2
-    loss = 0
+    mask = torch.ones(1, msg_hook.size(1), num_nodes, num_nodes, 1).cuda()
     # Only constrain on the fixed input nodes
-    for i in range(msg_hook.size(2)):
-        # import pdb
-        # pdb.set_trace()
-        if i % num_nodes != control_node[0] and i % num_nodes < input_nodes:
-            # print(i)
-            loss += var[:, :, i, :].sum()
-    return loss
+    mask[:, :, :, input_nodes:, :] = 0
+    for i in range(batch_size):
+        mask[:, i, :, control_nodes[i], :] = 0
+    loss = mask*var.view(msg_hook.size(
+        0), msg_hook.size(1), num_nodes, num_nodes, -1)
+
+    normalizer = mean.sum().item()
+    return loss.sum()/(batch_size*normalizer)
+
+
+def control_loss_1(msg_hook, control_nodes, input_nodes, variations):
+    """Similar to the loss in Interpretable Intuitive Physics Model
+    Assume the dataset is arranged as input vars first, target vars in the bottom
+
+    Args:
+        msg_hook (torch.Tensor): shape (time_steps, batch_size, node**2, information_dim)
+        control_nodes (torch.Tensor): shape (batch_size), which node to exclude since it's the controlled changing node
+        input_nodes (int): total number of nodes that need to be controlled.
+    """
+    num_nodes = int(np.sqrt(msg_hook.size(2)))
+    batch_size = msg_hook.size(1)
+    num_groups = batch_size//variations
+    msg_hook = msg_hook.view(msg_hook.size(
+        0), msg_hook.size(1), num_nodes, num_nodes, -1)
+    dispersion = 0
+    for i in np.arange(0, batch_size, variations):
+        control_node = control_nodes[i]
+        mean = msg_hook[:, i:i + variations].mean(dim=1, keepdim=True)
+        # var same size as msg_hook[:, i:i + variations]
+        var = (msg_hook[:, i:i + variations]-mean)**2
+        for j in range(input_nodes):
+            if j != control_node:
+                std = torch.sqrt(
+                    var[:, i:i + variations, :, j].sum(dim=1, keepdim=True)/variations)
+                dispersion += (std/mean[:, :, :, j]).sum()
+                import pdb
+                pdb.set_trace()
+    # Normalize by mean to measure dispersion, then average over the batch
+    return dispersion/num_groups
 
 
 def my_softmax(input, axis=1):

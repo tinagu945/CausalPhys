@@ -4,6 +4,7 @@ import argparse
 import pickle
 import os
 import datetime
+import sys
 
 import torch.optim as optim
 from torch.optim import lr_scheduler
@@ -25,8 +26,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=42, help='Random seed.')
 parser.add_argument('--epochs', type=int, default=1000,
                     help='Number of epochs to train.')
-parser.add_argument('--batch-size', type=int, default=6,
-                    help='Number of samples per batch.')
+parser.add_argument('--train-bs', type=int, default=6,
+                    help='Number of samples per batch during training.')
+parser.add_argument('--val-bs', type=int, default=128,
+                    help='Number of samples per batch during validation and test.')
 parser.add_argument('--lr', type=float, default=1e-4,
                     help='Initial learning rate.')
 parser.add_argument('--encoder-hidden', type=int, default=256,
@@ -37,7 +40,7 @@ parser.add_argument('--temp', type=float, default=0.5,
                     help='Temperature for Gumbel softmax.')
 parser.add_argument('--input-atoms', type=int, default=6,
                     help='Number of atoms need to be controlled in simulation.')
-parser.add_argument('--suffix', type=str, default='_causal_vel_nohot',
+parser.add_argument('--suffix', type=str, default='causal_vel_delta_grouped_46656',
                     help='Suffix for training data (e.g. "_charged".')
 parser.add_argument('--encoder-dropout', type=float, default=0.0,
                     help='Dropout rate (1 - keep probability).')
@@ -47,7 +50,7 @@ parser.add_argument('--save-folder', type=str, default='logs',
                     help='Where to save the trained model and logs.')
 parser.add_argument('--edge-types', type=int, default=2,
                     help='The number of edge types to infer.')
-parser.add_argument('--dims', type=int, default=8,
+parser.add_argument('--dims', type=int, default=9,
                     help='The number of input dimensions (position + velocity).')
 parser.add_argument('--timesteps', type=int, default=19,
                     help='The number of time steps per sample.')
@@ -97,10 +100,12 @@ torch.cuda.manual_seed(args.seed)
 # Save model and meta-data. Always saves in a new sub-folder.
 now = datetime.datetime.now()
 timestamp = now.isoformat()
-save_folder = '{}/exp{}/'.format(args.save_folder, timestamp)
+save_folder = '{}/exp{}/'.format(args.save_folder,
+                                 '_'.join([timestamp]+[i.replace("--", "") for i in sys.argv[1:]]))
 os.mkdir(save_folder)
 meta_file = open(os.path.join(save_folder, 'meta.txt'), 'w')
 print(args, file=meta_file)
+print(save_folder)
 meta_file.flush()
 
 if args.self_loop:
@@ -149,34 +154,38 @@ def main():
     trajectory_len = 19
 
     if args.grouped:
+        assert args.train_bs % args.variations == 0, "Grouping training set requires args.traing-bs integer times of args.variations"
+
         train_data = load_one_graph_data(
             'train_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.variations)
         train_sampler = RandomPytorchSampler(train_data)
-        # batch_size fixed to be args.variations for grouped dataset
         train_data_loader = DataLoader(
-            train_data, batch_size=args.variations, shuffle=False, sampler=train_sampler)
-        print('Since the dataset is grouped, training batch_size is fixed at args.variations ', args.variations)
+            train_data, batch_size=args.train_bs, shuffle=False, sampler=train_sampler)
+
     else:
         train_data = load_one_graph_data(
             'train_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=False)
         train_data_loader = DataLoader(
-            train_data, batch_size=args.batch_size, shuffle=True)
+            train_data, batch_size=args.train_bs, shuffle=True)
 
+    # Val and test are always grouped to see control loss
     valid_data = load_one_graph_data(
-        'valid_'+args.suffix, size=args.val_size, self_loop=args.self_loop)
-    test_data = load_one_graph_data(
-        'test_'+args.suffix, size=args.test_size, self_loop=args.self_loop)
-
+        'valid_'+args.suffix, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=4)
+    valid_sampler = RandomPytorchSampler(valid_data)
     valid_data_loader = DataLoader(
-        valid_data, batch_size=args.batch_size, shuffle=True)
+        valid_data, batch_size=args.val_bs, shuffle=False, sampler=valid_sampler)
+
+    test_data = load_one_graph_data(
+        'test_'+args.suffix, size=args.test_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=4)
+    test_sampler = RandomPytorchSampler(test_data)
     test_data_loader = DataLoader(
-        test_data, batch_size=args.batch_size, shuffle=True)
+        test_data, batch_size=args.val_bs, shuffle=False, sampler=test_sampler)
 
     logger = Logger(save_folder)
 
     for epoch in range(args.epochs):
         # TODO: when len(train_dataset) reaches budget, force stop
-        # print('#batches in train_dataset', len(train_dataset)/args.batch_size)
+        # print('#batches in train_dataset', len(train_dataset)/args.train_bs)
         train_control(args, log_prior, logger, optimizer, save_folder,
                       train_data_loader, epoch, decoder, rel_rec, rel_send)
         nll_val_loss = val_control(

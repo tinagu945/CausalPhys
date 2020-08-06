@@ -5,7 +5,7 @@ from utils.logger import Logger
 
 
 def train_control(args, log_prior, logger, optimizer, save_folder, train_loader, epoch,
-                  decoder, rel_rec, rel_send, mask_grad=False, log_epoch=10):
+                  decoder, rel_rec, rel_send, mask_grad=False, log_epoch=5):
     t = time.time()
     nll_train = []
     acc_train = []
@@ -18,6 +18,7 @@ def train_control(args, log_prior, logger, optimizer, save_folder, train_loader,
 
     rel_graphs = []
     rel_graphs_grad = []
+    msg_hook_mean = []
 
     decoder.train()
     for batch_idx, all_data in enumerate(train_loader):
@@ -28,12 +29,14 @@ def train_control(args, log_prior, logger, optimizer, save_folder, train_loader,
             output, logits, msg_hook = decoder(data, rel_rec, rel_send,
                                                args.temp, args.hard, args.prediction_steps, [])
             control_constraint_loss = control_loss(
-                msg_hook, which_node, args.input_atoms)*args.control_constraint
+                msg_hook, which_node, args.input_atoms, args.variations)*args.control_constraint
+            # if batch_idx == 20:
+            #     print('start3', time.time()-start3)
 
         else:
             data, edge = all_data[0].cuda(), all_data[1].cuda()
-            output, logits, _ = decoder(data, rel_rec, rel_send,
-                                        args.temp, args.hard, args.prediction_steps, [])
+            output, logits, msg_hook = decoder(data, rel_rec, rel_send,
+                                               args.temp, args.hard, args.prediction_steps, [])
             control_constraint_loss = torch.zeros(1).cuda()
 
         prob = my_softmax(logits, -1)
@@ -44,7 +47,7 @@ def train_control(args, log_prior, logger, optimizer, save_folder, train_loader,
         loss_kl = kl_categorical(prob, log_prior, args.num_atoms)
         loss_kl *= args.kl
         loss = loss_nll + loss_kl + control_constraint_loss
-        # print(control_constraint_loss, loss_kl, loss_nll, data.size())
+
         optimizer.zero_grad()
         loss.backward()
 #         if mask_grad:
@@ -67,14 +70,19 @@ def train_control(args, log_prior, logger, optimizer, save_folder, train_loader,
         c_train.append(F.mse_loss(
             output[:, -3, :, :], target[:, -3, :, :]).item())
         control_train.append(control_constraint_loss.item())
+        msg_hook_mean.append(msg_hook.mean(dim=1).sum().item())
         if batch_idx % 50 == 0:
             print(batch_idx)
+            print('Train', control_constraint_loss.item(),
+                  loss_kl.item(), loss_nll.item(), np.mean(msg_hook_mean))
             rel_graphs.append(decoder.rel_graph.detach().cpu().numpy())
             rel_graphs_grad.append(
                 decoder.rel_graph.grad.detach().cpu().numpy())
 
+    print('Train AVG', np.mean(control_train),
+          np.mean(kl_train), np.mean(nll_train))
     print(epoch, decoder.rel_graph.softmax(-1), decoder.rel_graph.size())
     if epoch % log_epoch == 0:
         print('Train logging...')
         logger.log('train', decoder, epoch, np.mean(nll_train), kl=np.mean(kl_train), mse=np.mean(mse_train), a=np.mean(a_train), b=np.mean(b_train), c=np.mean(
-            c_train), control_constraint_loss=np.mean(control_train), lr=optimizer.param_groups[0]['lr'], rel_graphs=rel_graphs, rel_graphs_grad=rel_graphs_grad)
+            c_train), control_constraint_loss=np.mean(control_train), lr=optimizer.param_groups[0]['lr'], rel_graphs=rel_graphs, rel_graphs_grad=rel_graphs_grad, msg_hook_weights=np.mean(msg_hook_mean))

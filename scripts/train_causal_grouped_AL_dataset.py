@@ -47,7 +47,7 @@ parser.add_argument('--save-folder', type=str, default='logs',
                     help='Where to save the trained model and logs.')
 parser.add_argument('--edge-types', type=int, default=2,
                     help='The number of edge types to infer.')
-parser.add_argument('--dims', type=int, default=8,
+parser.add_argument('--dims', type=int, default=9,
                     help='The number of input dimensions (position + velocity).')
 parser.add_argument('--timesteps', type=int, default=19,
                     help='The number of time steps per sample.')
