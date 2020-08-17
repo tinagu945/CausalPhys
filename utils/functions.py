@@ -29,8 +29,8 @@ def control_loss(msg_hook, control_nodes, input_nodes, variations):
     loss = mask*var.view(msg_hook.size(
         0), msg_hook.size(1), num_nodes, num_nodes, -1)
 
-    normalizer = mean.sum().item()
-    return loss.sum()/(batch_size*normalizer)
+    # normalizer = mean.sum().item()
+    return loss.sum()/(batch_size)  # *normalizer)
 
 
 def control_loss_1(msg_hook, control_nodes, input_nodes, variations):

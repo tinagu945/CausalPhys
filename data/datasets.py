@@ -7,9 +7,11 @@ from torch.utils.data import Dataset
 class OneGraphDataset(Dataset):
     """One graph for all trajectories. Memory efficient."""
 
-    def __init__(self, data, edge):
+    def __init__(self, data, edge, mins, maxs):
         self.edge = edge
         self.data = data
+        self.mins = mins
+        self.maxs = maxs
 
     def __len__(self):
         return self.data.shape[0]
@@ -20,7 +22,7 @@ class OneGraphDataset(Dataset):
 
 # For non-AL, use-all dataset sampler.
 class ControlOneGraphDataset(Dataset):
-    def __init__(self, data, edge, control_nodes=5, variations=5):
+    def __init__(self, data, edge, mins, maxs, control_nodes=5, variations=5):
         """Assume the nodes to be controlled are the top k nodes, and the target nodes are at bottom
 
         Args:
@@ -32,6 +34,8 @@ class ControlOneGraphDataset(Dataset):
 
         self.data = data
         self.edge = edge
+        self.mins = mins
+        self.maxs = maxs
         self.control_nodes = control_nodes
         self.variations = variations
 

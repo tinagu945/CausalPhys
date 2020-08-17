@@ -15,43 +15,47 @@ class MLPDecoder_Causal(nn.Module):
 
     def __init__(self, args):
         super(MLPDecoder_Causal, self).__init__()
-        n_in_node = args.dims
-        edge_types = args.edge_types
-        msg_hid = args.decoder_hidden
-        msg_out = args.decoder_hidden
-        n_hid = args.decoder_hidden
-        skip_first = args.skip_first
-        num_nodes = args.num_atoms
-        do_prob = args.decoder_dropout
 
         # TODO: only the last col of the original adj matrix will be trained
         if args.self_loop:
-            self.rel_graph_shape = (1, 1, num_nodes**2, edge_types)
+            self.rel_graph_shape = (1, 1, args.num_atoms**2, args.edge_types)
         else:
-            self.rel_graph_shape = (1, 1, num_nodes*(num_nodes-1), edge_types)
+            self.rel_graph_shape = (
+                1, 1, args.num_atoms*(args.num_atoms-1), args.edge_types)
 
-        self.rel_graph = torch.zeros(
-            self.rel_graph_shape, requires_grad=True, device="cuda")
+        if args.gt_A:
+            self.rel_graph = torch.zeros(
+                self.rel_graph_shape, requires_grad=False, device="cuda")
+            self.rel_graph[:, :, :, 0] = 10.0
+            # for sincos
+            # for i in [-2, -3, -4, -13, -14]:
+            # for 200mus
+            for i in [-2, -5, -6, -13, -14]:
+                self.rel_graph[:, :, i, 0] = 0.0
+            self.rel_graph[:, :, :, 1] = 10.0 - self.rel_graph[:, :, :, 0]
+            print('Using ground truth A and the softmax result is', self.rel_graph)
+        else:
+            self.rel_graph = torch.zeros(
+                self.rel_graph_shape, requires_grad=True, device="cuda")
+            nn.init.xavier_normal_(self.rel_graph)
 
-        nn.init.xavier_normal_(self.rel_graph)
-
-        self.num_nodes = num_nodes
-        self.edge_types = edge_types
+        self.edge_types = args.edge_types
 
         self.msg_fc1 = nn.ModuleList(
-            [nn.Linear(2 * n_in_node, msg_hid) for _ in range(edge_types)])
+            [nn.Linear(2 * args.dims, args.decoder_hidden) for _ in range(args.edge_types)])
         self.msg_fc2 = nn.ModuleList(
-            [nn.Linear(msg_hid, msg_out) for _ in range(edge_types)])
-        self.msg_out_shape = msg_out
-        self.skip_first_edge_type = skip_first
+            [nn.Linear(args.decoder_hidden, args.decoder_hidden) for _ in range(args.edge_types)])
+        self.msg_out_shape = args.decoder_hidden
+        self.skip_first_edge_type = args.skip_first
         # dim small to large to small
-        self.out_fc1 = nn.Linear(n_in_node + msg_out, n_hid)
-        self.out_fc2 = nn.Linear(n_hid, n_hid)
-        self.out_fc3 = nn.Linear(n_hid, n_in_node)
+        self.out_fc1 = nn.Linear(
+            args.dims + args.decoder_hidden, args.decoder_hidden)
+        self.out_fc2 = nn.Linear(args.decoder_hidden, args.decoder_hidden)
+        self.out_fc3 = nn.Linear(args.decoder_hidden, args.dims)
 
         print('Using learned interaction net decoder.')
 
-        self.dropout_prob = do_prob
+        self.dropout_prob = args.decoder_dropout
 
     def single_step_forward(self, single_timestep_inputs, rel_rec, rel_send,
                             single_timestep_rel_type, msg_hook):
@@ -65,7 +69,8 @@ class MLPDecoder_Causal(nn.Module):
         # Node2edge
         receivers = torch.matmul(rel_rec, single_timestep_inputs)
         senders = torch.matmul(rel_send, single_timestep_inputs)
-        # pre_msg size: [bs,timesteps, num_atoms*(num_atoms-1), 2]
+        # senders size: [bs, 1, num_atoms*(num_atoms-1), num_dims]
+        # pre_msg size: [bs, timesteps, num_atoms*(num_atoms-1), 2*num_dims]
 
         pre_msg = torch.cat([senders, receivers], dim=-1)
 
@@ -92,8 +97,8 @@ class MLPDecoder_Causal(nn.Module):
 
         msg_hook.append(msg.transpose(1, 0))
         # all_msgs[:,:,-8,:] = all_msgs[:,:,-8,:]*0
-        # Aggregate all msgs to receiver
-        # agg_msg bs, pred_steps, #node, self.msg_out_shape=256
+        # Edge2node, Aggregate all msgs to receiver
+        # agg_msg size [bs, pred_steps, #node, self.msg_out_shape=256]
         agg_msgs = all_msgs.transpose(-2, -1).matmul(rel_rec).transpose(-2, -1)
         agg_msgs = agg_msgs.contiguous()
 

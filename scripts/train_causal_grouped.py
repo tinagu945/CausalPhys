@@ -32,8 +32,6 @@ parser.add_argument('--val-bs', type=int, default=128,
                     help='Number of samples per batch during validation and test.')
 parser.add_argument('--lr', type=float, default=1e-4,
                     help='Initial learning rate.')
-parser.add_argument('--encoder-hidden', type=int, default=256,
-                    help='Number of hidden units.')
 parser.add_argument('--decoder-hidden', type=int, default=256,
                     help='Number of hidden units.')
 parser.add_argument('--temp', type=float, default=0.5,
@@ -42,10 +40,10 @@ parser.add_argument('--input-atoms', type=int, default=6,
                     help='Number of atoms need to be controlled in simulation.')
 parser.add_argument('--suffix', type=str, default='causal_vel_delta_grouped_46656',
                     help='Suffix for training data (e.g. "_charged".')
-parser.add_argument('--encoder-dropout', type=float, default=0.0,
-                    help='Dropout rate (1 - keep probability).')
+parser.add_argument('--val-suffix', type=str, default=None,
+                    help='Suffix for valid and testing data (e.g. "_charged".')
 parser.add_argument('--decoder-dropout', type=float, default=0.0,
-                    help='Dropout rate (1 - keep probability).')
+                    help='Probability of an element to be zeroed.')
 parser.add_argument('--save-folder', type=str, default='logs',
                     help='Where to save the trained model and logs.')
 parser.add_argument('--edge-types', type=int, default=2,
@@ -84,14 +82,24 @@ parser.add_argument('--test-size', type=int, default=None,
                     help='#datapoints for test')
 parser.add_argument('--grouped', action='store_true', default=False,
                     help='Whether to group the dataset')
+parser.add_argument('--val-grouped', action='store_true', default=False,
+                    help='Whether to group the dataset')
 parser.add_argument('--control-constraint', type=float, default=0.0,
                     help='Coefficient for control constraint loss')
+parser.add_argument('--gt-A', action='store_true', default=False,
+                    help='Whether use the ground truth adjacency matrix, useful for debuging the encoder.')
 
 args = parser.parse_args()
 args.num_atoms = args.input_atoms+args.target_atoms
 args.script = 'train_causal_grouped'
-print(args)
+if args.val_suffix is None:
+    print('args.val_suffix is None, so will be the same as args.suffix', args.suffix)
+    args.val_suffix = args.suffix
+if args.gt_A:
+    print('Using ground truth A and kl loss will be omitted')
+    args.kl = 0
 
+print(args)
 
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
@@ -130,7 +138,6 @@ scheduler = lr_scheduler.StepLR(optimizer, step_size=args.lr_decay,
 triu_indices = get_triu_offdiag_indices(args.num_atoms)
 tril_indices = get_tril_offdiag_indices(args.num_atoms)
 
-
 prior = np.array([0.9, 0.1])  # TODO: hard coded for now
 print("Using prior")
 print(prior)
@@ -168,22 +175,36 @@ def main():
         train_data_loader = DataLoader(
             train_data, batch_size=args.train_bs, shuffle=True)
 
-    # Val and test are always grouped to see control loss
-    valid_data = load_one_graph_data(
-        'valid_'+args.suffix, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=4)
-    valid_sampler = RandomPytorchSampler(valid_data)
-    valid_data_loader = DataLoader(
-        valid_data, batch_size=args.val_bs, shuffle=False, sampler=valid_sampler)
+    if args.val_grouped:
+        # To see control loss, val and test should be grouped
+        valid_data = load_one_graph_data(
+            'valid_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=4)
+        valid_sampler = RandomPytorchSampler(valid_data)
+        valid_data_loader = DataLoader(
+            valid_data, batch_size=args.val_bs, shuffle=False, sampler=valid_sampler)
 
-    test_data = load_one_graph_data(
-        'test_'+args.suffix, size=args.test_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=4)
-    test_sampler = RandomPytorchSampler(test_data)
-    test_data_loader = DataLoader(
-        test_data, batch_size=args.val_bs, shuffle=False, sampler=test_sampler)
+        # test_data = load_one_graph_data(
+        #     'test_'+args.val_suffix, size=args.test_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=4)
+        # test_sampler = RandomPytorchSampler(test_data)
+        # test_data_loader = DataLoader(
+        #     test_data, batch_size=args.val_bs, shuffle=False, sampler=test_sampler)
+    else:
+        valid_data = load_one_graph_data(
+            'valid_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=False)
+        valid_data_loader = DataLoader(
+            valid_data, batch_size=args.val_bs, shuffle=True)
+        # test_data = load_one_graph_data(
+        #     'test_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=False)
+        # test_data_loader = DataLoader(
+        #     test_data, batch_size=args.val_bs, shuffle=True)
 
     logger = Logger(save_folder)
 
     for epoch in range(args.epochs):
+        if epoch == 0:
+            nll_val_loss = val_control(
+                args, log_prior, logger, save_folder, valid_data_loader, -1, decoder, rel_rec, rel_send)
+
         # TODO: when len(train_dataset) reaches budget, force stop
         # print('#batches in train_dataset', len(train_dataset)/args.train_bs)
         train_control(args, log_prior, logger, optimizer, save_folder,
@@ -195,6 +216,9 @@ def main():
         if nll_val_loss < best_val_loss:
             best_val_loss = nll_val_loss
             best_epoch = epoch
+            print(str(best_epoch), file=meta_file)
+            meta_file.flush()
+        print('best_epoch', best_epoch)
 
     print("Optimization Finished!")
     print("Best Epoch: {:04d}".format(best_epoch))
@@ -202,7 +226,7 @@ def main():
         print("Best Epoch: {:04d}".format(best_epoch), file=log)
         log.flush()
 
-    test_control(test_data_loader)
+    # test_control(test_data_loader)
     if log is not None:
         print(save_folder)
         log.close()

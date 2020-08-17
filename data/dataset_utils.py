@@ -23,14 +23,18 @@ def update_ALDataset(dataset, new_data, which_nodes, batch_size):
 
 
 def load_one_graph_data(suffix, control=False, self_loop=False, size=None, **kwargs):
+    print('loading', suffix)
     feat = np.load('data/datasets/feat_'+suffix + '.npy')
     if size:
         feat = feat[:int(size)]
     edge = np.load('data/datasets/edges_' + suffix + '.npy')[0]
 
+    mins, maxs = [], []
     num_atoms = feat.shape[1]
     for i in range(0, num_atoms):
         #         print(i, np.max(feat_valid[:,i,:,:]), np.min(feat_valid[:,i,:,:]))
+        mins.append(np.min(feat[:, i, :, :]))
+        maxs.append(np.max(feat[:, i, :, :]))
         feat[:, i, :, :] = (feat[:, i, :, :] - np.min(feat[:, i, :, :]))*2 /\
             (np.max(feat[:, i, :, :])-np.min(feat[:, i, :, :]))-1
 
@@ -51,7 +55,7 @@ def load_one_graph_data(suffix, control=False, self_loop=False, size=None, **kwa
     edge = edge[:, off_diag_idx]
 
     if control:
-        dataset = ControlOneGraphDataset(feat, edge, **kwargs)
+        dataset = ControlOneGraphDataset(feat, edge, mins, maxs, **kwargs)
     else:
-        dataset = OneGraphDataset(feat, edge)
+        dataset = OneGraphDataset(feat, edge, mins, maxs)
     return dataset
