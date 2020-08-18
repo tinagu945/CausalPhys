@@ -45,12 +45,18 @@ class ControlOneGraphDataset(Dataset):
     def __getitem__(self, idx):
         # data[j*(5**x)+i]
         # print(idx, self.data.shape[0])
-        which_node, which_variation = divmod(int(idx), self.data.shape[0])
-        # reverse the order
+        which_node, index = divmod(int(idx), self.data.shape[0])
+        # reverse the order: which_node counts from zero from right changed to from left.
         which_node = self.control_nodes - which_node - 1
-        i, j = divmod(which_variation, self.variations)
-        idx = j*(self.variations**which_node)+i
-        return self.data[idx], which_node, self.edge
+        # integer, reminder = divmod(a, b) = a/b
+        # group size: self.variations**(which_node+1)
+        which_group, group_offset = divmod(
+            index, self.variations**(which_node+1))
+        i, j = divmod(group_offset, self.variations)
+        real_index = which_group*(self.variations**(which_node+1)) + \
+            j*(self.variations**which_node)+i
+        # print(which_node, index, which_group, group_offset, i, j, real_index)
+        return self.data[real_index], which_node, self.edge
 
 
 # ALIndexDataset for dataset sampler

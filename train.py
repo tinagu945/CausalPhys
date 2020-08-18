@@ -27,6 +27,8 @@ def train_control(args, log_prior, logger, optimizer, save_folder, train_loader,
             # edge is only for calculating edge accuracy. Since we have not included that, edge is not used.
             data, which_node, edge = all_data[0].cuda(
             ), all_data[1].cuda(), all_data[2].cuda()
+            import pdb
+            pdb.set_trace()
             output, logits, msg_hook = decoder(data, rel_rec, rel_send,
                                                args.temp, args.hard, args.prediction_steps, [])
             control_constraint_loss = control_loss(

@@ -199,7 +199,8 @@ def main():
         #     test_data, batch_size=args.val_bs, shuffle=True)
 
     logger = Logger(save_folder)
-
+    # import pdb
+    # pdb.set_trace()
     for epoch in range(args.epochs):
         if epoch == 0:
             nll_val_loss = val_control(
