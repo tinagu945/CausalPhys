@@ -2,10 +2,20 @@ import time
 import torch
 from utils.functions import *
 from utils.logger import Logger
+from val import val_control
 
 
-def train_control(args, log_prior, logger, optimizer, save_folder, train_loader, epoch,
-                  decoder, rel_rec, rel_send, mask_grad=False, log_epoch=5):
+def train_val_control(args, log_prior, logger, optimizer, save_folder, train_loader, valid_data_loader,
+                      decoder, rel_rec, rel_send, data_trained, mask_grad=False, train_log=5, val_log=1):
+    """
+        train_log (int, optional): When the amount of data seen divides train_log, do a log. Defaults to 5.
+        val_log (int, optional): Similar to above. Defaults to 1.
+    """
+    if data_trained == 0:
+        print('Doing initial validation before training...')
+        val_control(
+            args, log_prior, logger, save_folder, valid_data_loader, -1, decoder, rel_rec, rel_send)
+
     t = time.time()
     nll_train = []
     nll_train_lasttwo = []
@@ -27,8 +37,6 @@ def train_control(args, log_prior, logger, optimizer, save_folder, train_loader,
             # edge is only for calculating edge accuracy. Since we have not included that, edge is not used.
             data, which_node, edge = all_data[0].cuda(
             ), all_data[1].cuda(), all_data[2].cuda()
-            import pdb
-            pdb.set_trace()
             output, logits, msg_hook = decoder(data, rel_rec, rel_send,
                                                args.temp, args.hard, args.prediction_steps, [])
             control_constraint_loss = control_loss(
@@ -42,6 +50,7 @@ def train_control(args, log_prior, logger, optimizer, save_folder, train_loader,
                                                args.temp, args.hard, args.prediction_steps, [])
             control_constraint_loss = torch.zeros(1).cuda()
 
+        data_trained += data.size(0)
         prob = my_softmax(logits, -1)
         # data: bs, #node, #timesteps, dim
         target = data[:, :, 1:, :]
@@ -86,11 +95,17 @@ def train_control(args, log_prior, logger, optimizer, save_folder, train_loader,
                 rel_graphs_grad.append(
                     decoder.rel_graph.grad.detach().cpu().numpy())
 
+        if data_trained % train_log == 0:
+            print('Train logging...')
+            logger.log('train', decoder, data_trained//train_log, np.mean(nll_train), kl=np.mean(kl_train), mse=np.mean(mse_train), a=np.mean(a_train), b=np.mean(b_train), c=np.mean(
+                c_train), control_constraint_loss=np.mean(control_train), lr=optimizer.param_groups[0]['lr'], rel_graphs=rel_graphs, rel_graphs_grad=rel_graphs_grad, msg_hook_weights=np.mean(msg_hook_mean), nll_train_lasttwo=np.mean(nll_train_lasttwo))
+
+        if data_trained % val_log == 0:
+            val_control(
+                args, log_prior, logger, save_folder, valid_data_loader, data_trained//val_log, decoder, rel_rec, rel_send)
+
     print('Train AVG', np.mean(control_train),
           np.mean(kl_train), np.mean(nll_train), np.mean(nll_train_lasttwo))
-    print(epoch, decoder.rel_graph.softmax(-1), decoder.rel_graph.size())
-
-    if epoch % log_epoch == 0:
-        print('Train logging...')
-        logger.log('train', decoder, epoch, np.mean(nll_train), kl=np.mean(kl_train), mse=np.mean(mse_train), a=np.mean(a_train), b=np.mean(b_train), c=np.mean(
-            c_train), control_constraint_loss=np.mean(control_train), lr=optimizer.param_groups[0]['lr'], rel_graphs=rel_graphs, rel_graphs_grad=rel_graphs_grad, msg_hook_weights=np.mean(msg_hook_mean), nll_train_lasttwo=np.mean(nll_train_lasttwo))
+    print(data_trained//train_log, decoder.rel_graph.softmax(-1),
+          decoder.rel_graph.size())
+    return data_trained

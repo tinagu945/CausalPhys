@@ -13,8 +13,7 @@ from torch.utils.data import DataLoader
 
 from utils.functions import *
 from models.modules_causal_vel import *
-from train import train_control
-from val import val_control
+from train import train_val_control
 from test import test_control
 from utils.logger import Logger
 from envs.rollout_func import rollout_sliding_cube
@@ -83,7 +82,7 @@ parser.add_argument('--test-size', type=int, default=None,
 parser.add_argument('--grouped', action='store_true', default=False,
                     help='Whether to group the dataset')
 parser.add_argument('--val-grouped', action='store_true', default=False,
-                    help='Whether to group the dataset')
+                    help='Whether to group the valid and test dataset')
 parser.add_argument('--control-constraint', type=float, default=0.0,
                     help='Coefficient for control constraint loss')
 parser.add_argument('--gt-A', action='store_true', default=False,
@@ -159,26 +158,27 @@ def main():
     best_val_loss = np.inf
     best_epoch = 0
     trajectory_len = 19
+    data_trained = 0
 
     if args.grouped:
         assert args.train_bs % args.variations == 0, "Grouping training set requires args.traing-bs integer times of args.variations"
 
         train_data = load_one_graph_data(
-            'train_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.variations)
+            'train_causal_vel_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.variations)
         train_sampler = RandomPytorchSampler(train_data)
         train_data_loader = DataLoader(
             train_data, batch_size=args.train_bs, shuffle=False, sampler=train_sampler)
 
     else:
         train_data = load_one_graph_data(
-            'train_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=False)
+            'train_causal_vel_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=False)
         train_data_loader = DataLoader(
             train_data, batch_size=args.train_bs, shuffle=True)
 
     if args.val_grouped:
         # To see control loss, val and test should be grouped
         valid_data = load_one_graph_data(
-            'valid_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=4)
+            'valid_causal_vel_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=4)
         valid_sampler = RandomPytorchSampler(valid_data)
         valid_data_loader = DataLoader(
             valid_data, batch_size=args.val_bs, shuffle=False, sampler=valid_sampler)
@@ -190,7 +190,7 @@ def main():
         #     test_data, batch_size=args.val_bs, shuffle=False, sampler=test_sampler)
     else:
         valid_data = load_one_graph_data(
-            'valid_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=False)
+            'valid_causal_vel_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=False)
         valid_data_loader = DataLoader(
             valid_data, batch_size=args.val_bs, shuffle=True)
         # test_data = load_one_graph_data(
@@ -199,32 +199,17 @@ def main():
         #     test_data, batch_size=args.val_bs, shuffle=True)
 
     logger = Logger(save_folder)
-    # import pdb
-    # pdb.set_trace()
-    for epoch in range(args.epochs):
-        if epoch == 0:
-            nll_val_loss = val_control(
-                args, log_prior, logger, save_folder, valid_data_loader, -1, decoder, rel_rec, rel_send)
 
+    for epoch in range(args.epochs):
         # TODO: when len(train_dataset) reaches budget, force stop
         # print('#batches in train_dataset', len(train_dataset)/args.train_bs)
-        train_control(args, log_prior, logger, optimizer, save_folder,
-                      train_data_loader, epoch, decoder, rel_rec, rel_send)
-        nll_val_loss = val_control(
-            args, log_prior, logger, save_folder, valid_data_loader, epoch, decoder, rel_rec, rel_send)
-
+        data_trained = train_val_control(args, log_prior, logger, optimizer, save_folder,
+                                         train_data_loader, valid_data_loader, decoder, rel_rec, rel_send, data_trained, train_log=train_data.data.shape[0], val_log=train_data.data.shape[0])
         scheduler.step()
-        if nll_val_loss < best_val_loss:
-            best_val_loss = nll_val_loss
-            best_epoch = epoch
-            print(str(best_epoch), file=meta_file)
-            meta_file.flush()
-        print('best_epoch', best_epoch)
-
     print("Optimization Finished!")
-    print("Best Epoch: {:04d}".format(best_epoch))
+    print("Best Epoch: {:04d}".format(logger.best_epoch))
     if args.save_folder:
-        print("Best Epoch: {:04d}".format(best_epoch), file=log)
+        print("Best Epoch: {:04d}".format(logger.best_epoch), file=meta_file)
         log.flush()
 
     # test_control(test_data_loader)

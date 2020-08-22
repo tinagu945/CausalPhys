@@ -30,6 +30,7 @@ def val_control(args, log_prior, logger, save_folder, valid_loader, epoch, decod
                                                args.temp, args.hard, args.prediction_steps, [])
             control_constraint_loss = torch.zeros(1).cuda()
 
+        # print('val', data[:, :-2, 0, 0])
         prob = my_softmax(logits, -1)
 
         target = data[:, :, 1:, :]

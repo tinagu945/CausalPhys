@@ -24,6 +24,8 @@ class Logger(object):
                 np.save(os.path.join(self.save_folder, str(epoch) +
                                      '_rel_graph_grad.npy'), np.array(rel_graphs_grad))
         elif mode == 'val':
+            self.val_writer.add_scalar(
+                'best_epoch_val', self.best_epoch, epoch)
             if nll < self.best_val_loss:
                 self.best_val_loss = np.mean(nll)
                 self.best_epoch = epoch
