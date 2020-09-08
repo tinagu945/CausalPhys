@@ -1,4 +1,6 @@
-"""Train data like Interpretable Physics"""
+"""Train data like Interpretable Physics
+TODO: haven't changed to a big batch contrains many small groups version.
+"""
 import time
 import argparse
 import pickle

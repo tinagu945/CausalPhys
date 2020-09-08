@@ -313,7 +313,7 @@ def nll_gaussian(preds, target, variance, add_const=False):
     if add_const:
         const = 0.5 * np.log(2 * np.pi * variance)
         neg_log_p += const
-    return neg_log_p.sum() / (target.size(0) * target.size(1))
+    return neg_log_p.sum() / (target.size(0) * target.size(1)), neg_log_p.sum((0,1,3)) / (target.size(0) * target.size(1))
 
 
 def edge_accuracy(preds, target):

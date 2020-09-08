@@ -22,14 +22,17 @@ class OneGraphDataset(Dataset):
 
 # For non-AL, use-all dataset sampler.
 class ControlOneGraphDataset(Dataset):
-    def __init__(self, data, edge, mins, maxs, control_nodes=5, variations=5):
+    def __init__(self, data, edge, mins, maxs, control_nodes=5, variations=5, need_grouping=True):
         """Assume the nodes to be controlled are the top k nodes, and the target nodes are at bottom
 
         Args:
-            data (np.array): 
-            edge (np.array): One graph for all trajectories. Memory efficient 
+            data (np.array):
+            edge (np.array): One graph for all trajectories. Memory efficient
             control_nodes (int): #nodes needs to be controlled, equals #nodes in data - #target nodes
-            variations (int, optional): #values each node takes in the dataset. Currently needs be the same for all nodes. Defaults to 5.
+            #values each node takes in the dataset. Currently needs be the same for all nodes. Defaults to 5.
+            variations (int, optional):
+            #variations of permutations. If no, data_size=dataset_size
+            need_grouping: (bool, optional): Whether the data is actually of size dataset_size//variations. If so, the data must be arranged in
         """
 
         self.data = data
@@ -38,24 +41,36 @@ class ControlOneGraphDataset(Dataset):
         self.maxs = maxs
         self.control_nodes = control_nodes
         self.variations = variations
+        self.need_grouping = need_grouping
 
     def __len__(self):
-        return self.data.shape[0]*self.control_nodes
+        if self.need_grouping:
+            return self.data.shape[0]*self.control_nodes
+        else:
+            return self.data.shape[0]
 
     def __getitem__(self, idx):
-        # data[j*(5**x)+i]
-        # print(idx, self.data.shape[0])
-        which_node, index = divmod(int(idx), self.data.shape[0])
-        # reverse the order: which_node counts from zero from right changed to from left.
-        which_node = self.control_nodes - which_node - 1
-        # integer, reminder = divmod(a, b) = a/b
-        # group size: self.variations**(which_node+1)
-        which_group, group_offset = divmod(
-            index, self.variations**(which_node+1))
-        i, j = divmod(group_offset, self.variations)
-        real_index = which_group*(self.variations**(which_node+1)) + \
-            j*(self.variations**which_node)+i
-        # print(which_node, index, which_group, group_offset, i, j, real_index)
+        if self.need_grouping:
+            # data[j*(5**x)+i]
+            # print(idx, self.data.shape[0])
+            which_node, index = divmod(int(idx), self.data.shape[0])
+            # import pdb
+            # pdb.set_trace()
+            # which_node = self.control_nodes - which_node - 1
+            # integer, reminder = divmod(a, b) = a/b
+            # group size: self.variations**(which_node+1)
+            which_group, group_offset = divmod(
+                index, self.variations**(which_node+1))
+            i, j = divmod(group_offset, self.variations)
+            real_index = which_group*(self.variations**(which_node+1)) + \
+                j*(self.variations**which_node)+i
+            # print(which_node, index, which_group, group_offset, i, j, real_index)
+            # reverse the order: which_node counts from zero from right changed to from left.
+            which_node = self.control_nodes - which_node - 1
+        else:
+            real_index = int(idx)
+            which_node, _ = divmod(real_index, int(
+                self.data.shape[0]/self.control_nodes))
         return self.data[real_index], which_node, self.edge
 
 

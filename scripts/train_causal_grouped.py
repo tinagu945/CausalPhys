@@ -16,7 +16,6 @@ from models.modules_causal_vel import *
 from train import train_val_control
 from test import test_control
 from utils.logger import Logger
-from envs.rollout_func import rollout_sliding_cube
 from data.AL_sampler import RandomPytorchSampler
 from data.datasets import *
 from data.dataset_utils import *
@@ -25,13 +24,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=42, help='Random seed.')
 parser.add_argument('--epochs', type=int, default=1000,
                     help='Number of epochs to train.')
-parser.add_argument('--train-bs', type=int, default=6,
+parser.add_argument('--train-bs', type=int, default=144,
                     help='Number of samples per batch during training.')
 parser.add_argument('--val-bs', type=int, default=128,
                     help='Number of samples per batch during validation and test.')
 parser.add_argument('--lr', type=float, default=1e-4,
                     help='Initial learning rate.')
-parser.add_argument('--decoder-hidden', type=int, default=256,
+parser.add_argument('--decoder-hidden', type=int, default=512,
                     help='Number of hidden units.')
 parser.add_argument('--temp', type=float, default=0.5,
                     help='Temperature for Gumbel softmax.')
@@ -68,7 +67,9 @@ parser.add_argument('--self-loop', action='store_true', default=True,
 parser.add_argument('--kl', type=float, default=10,
                     help='Whether to include kl as loss.')
 parser.add_argument('--variations', type=int, default=6,
-                    help='#values for one controlled var.')
+                    help='#values for one controlled var in training dataset.')
+parser.add_argument('--val-variations', type=int, default=4,
+                    help='#values for one controlled var in validation dataset.')
 parser.add_argument('--target-atoms', type=int, default=2,
                     help='#atoms for results.')
 parser.add_argument('--comment', type=str, default='',
@@ -80,7 +81,11 @@ parser.add_argument('--val-size', type=int, default=None,
 parser.add_argument('--test-size', type=int, default=None,
                     help='#datapoints for test')
 parser.add_argument('--grouped', action='store_true', default=False,
-                    help='Whether to group the dataset')
+                    help='Whether we want to do the grouped training.')
+parser.add_argument('--need-grouping', action='store_true', default=False,
+                    help='If grouped is True, whether the dataset actually needs grouping.')
+parser.add_argument('--val-need-grouping', action='store_true', default=False,
+                    help='If grouped is True, whether the validation dataset actually needs grouping.')
 parser.add_argument('--val-grouped', action='store_true', default=False,
                     help='Whether to group the valid and test dataset')
 parser.add_argument('--control-constraint', type=float, default=0.0,
@@ -164,21 +169,21 @@ def main():
         assert args.train_bs % args.variations == 0, "Grouping training set requires args.traing-bs integer times of args.variations"
 
         train_data = load_one_graph_data(
-            'train_causal_vel_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.variations)
+            'train_causal_vel_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=args.grouped, control_nodes=args.input_atoms, variations=args.variations, need_grouping=args.need_grouping)
         train_sampler = RandomPytorchSampler(train_data)
         train_data_loader = DataLoader(
             train_data, batch_size=args.train_bs, shuffle=False, sampler=train_sampler)
 
     else:
         train_data = load_one_graph_data(
-            'train_causal_vel_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=False)
+            'train_causal_vel_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=args.grouped)
         train_data_loader = DataLoader(
             train_data, batch_size=args.train_bs, shuffle=True)
 
     if args.val_grouped:
         # To see control loss, val and test should be grouped
         valid_data = load_one_graph_data(
-            'valid_causal_vel_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=4)
+            'valid_causal_vel_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.val_variations, need_grouping=args.val_need_grouping)
         valid_sampler = RandomPytorchSampler(valid_data)
         valid_data_loader = DataLoader(
             valid_data, batch_size=args.val_bs, shuffle=False, sampler=valid_sampler)
@@ -204,18 +209,18 @@ def main():
         # TODO: when len(train_dataset) reaches budget, force stop
         # print('#batches in train_dataset', len(train_dataset)/args.train_bs)
         data_trained = train_val_control(args, log_prior, logger, optimizer, save_folder,
-                                         train_data_loader, valid_data_loader, decoder, rel_rec, rel_send, data_trained, train_log=train_data.data.shape[0], val_log=train_data.data.shape[0])
+                                         train_data_loader, valid_data_loader, decoder, rel_rec, rel_send, data_trained, train_log=train_data.data.shape[0], val_log=train_data.data.shape[0]*10)
         scheduler.step()
     print("Optimization Finished!")
     print("Best Epoch: {:04d}".format(logger.best_epoch))
     if args.save_folder:
         print("Best Epoch: {:04d}".format(logger.best_epoch), file=meta_file)
-        log.flush()
+        meta_file.flush()
 
-    # test_control(test_data_loader)
-    if log is not None:
+    test_control(test_data_loader)
+    if meta_file is not None:
         print(save_folder)
-        log.close()
+        meta_file.close()
 
 
 if __name__ == "__main__":

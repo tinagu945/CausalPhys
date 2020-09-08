@@ -80,7 +80,7 @@ class MaximalEntropyDatasetSampler(AbstractSampler):
 
 class RandomDatasetSampler(AbstractSampler):
     """
-    Samples elements randomly as groups.
+    Samples groups from an existing dataset, instead of generating data on the fly by a simulator.
     """
 
     def __init__(self, dataset):

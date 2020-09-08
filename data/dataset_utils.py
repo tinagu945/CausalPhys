@@ -31,7 +31,7 @@ def load_one_graph_data(suffix, control=False, self_loop=False, size=None, **kwa
 
     mins, maxs = [], []
     num_atoms = feat.shape[1]
-    for i in range(0, num_atoms):
+    for i in range(num_atoms):
         #         print(i, np.max(feat_valid[:,i,:,:]), np.min(feat_valid[:,i,:,:]))
         mins.append(np.min(feat[:, i, :, :]))
         maxs.append(np.max(feat[:, i, :, :]))

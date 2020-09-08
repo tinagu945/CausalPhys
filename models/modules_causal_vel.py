@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import random
+import numpy as np
 
 from torch.autograd import Variable
 from utils.functions import my_softmax, get_offdiag_indices, gumbel_softmax
@@ -24,15 +25,16 @@ class MLPDecoder_Causal(nn.Module):
                 1, 1, args.num_atoms*(args.num_atoms-1), args.edge_types)
 
         if args.gt_A:
-            self.rel_graph = torch.zeros(
-                self.rel_graph_shape, requires_grad=False, device="cuda")
-            self.rel_graph[:, :, :, 0] = 10.0
-            # for sincos
-            # for i in [-2, -3, -4, -13, -14]:
-            # for 200mus
-            for i in [-2, -5, -6, -13, -14]:
-                self.rel_graph[:, :, i, 0] = 0.0
-            self.rel_graph[:, :, :, 1] = 10.0 - self.rel_graph[:, :, :, 0]
+            edge = np.load(
+                'data/datasets/edges_train_causal_vel_' + args.suffix + '.npy')
+            self.rel_graph = torch.from_numpy(edge*10).cuda()
+            self.requires_grad = False
+            # self.rel_graph = torch.zeros(
+            #     self.rel_graph_shape, requires_grad=False, device="cuda")
+            # self.rel_graph[:, :, :, 0] = 10.0
+            # for i in [-2, -5, -6, -13, -14]:
+            #     self.rel_graph[:, :, i, 0] = 0.0
+            # self.rel_graph[:, :, :, 1] = 10.0 - self.rel_graph[:, :, :, 0]
             print('Using ground truth A and the softmax result is', self.rel_graph)
         else:
             self.rel_graph = torch.zeros(
