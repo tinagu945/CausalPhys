@@ -29,19 +29,20 @@ class MLPDecoder_Causal(nn.Module):
                 'data/datasets/edges_train_causal_vel_' + args.suffix + '.npy')
             self.rel_graph = torch.from_numpy(edge*10).cuda()
             self.requires_grad = False
-            # self.rel_graph = torch.zeros(
-            #     self.rel_graph_shape, requires_grad=False, device="cuda")
-            # self.rel_graph[:, :, :, 0] = 10.0
-            # for i in [-2, -5, -6, -13, -14]:
-            #     self.rel_graph[:, :, i, 0] = 0.0
-            # self.rel_graph[:, :, :, 1] = 10.0 - self.rel_graph[:, :, :, 0]
             print('Using ground truth A and the softmax result is', self.rel_graph)
+        elif args.all_connect:
+            self.rel_graph = torch.zeros(
+                self.rel_graph_shape, requires_grad=False, device="cuda")
+            self.rel_graph[:, :, :, 1] = 10.0
+            print('Using fully connected adjacency matrix!', self.rel_graph)
         else:
             self.rel_graph = torch.zeros(
                 self.rel_graph_shape, requires_grad=True, device="cuda")
             nn.init.xavier_normal_(self.rel_graph)
 
         self.edge_types = args.edge_types
+        self.all_connect = args.all_connect
+        print('decoder is all_connect?', self.all_connect)
 
         self.msg_fc1 = nn.ModuleList(
             [nn.Linear(2 * args.dims, args.decoder_hidden) for _ in range(args.edge_types)])
@@ -86,21 +87,23 @@ class MLPDecoder_Causal(nn.Module):
         else:
             start_idx = 0
 
-        # Run separate MLP for every edge type
-        # NOTE: To exlude one edge type, simply offset range by 1
+        # # Run separate MLP for every edge type
+        # # NOTE: To exlude one edge type, simply offset range by 1
         for i in range(start_idx, len(self.msg_fc2)):
             msg = F.relu(self.msg_fc1[i](pre_msg))
             msg = F.dropout(msg, p=self.dropout_prob)
             msg = F.relu(self.msg_fc2[i](msg))
             # single_timestep_rel_type size: [bs, pred_steps, #node*(#node-1), #edge_type]
             # msg size: [bs, pred_steps, #node*(#node-1), self.msg_out_shape=256]
-            msg = msg * single_timestep_rel_type[:, :, :, i:i + 1]
+            if not self.all_connect:
+                msg = msg * single_timestep_rel_type[:, :, :, i:i + 1]
             all_msgs += msg
 
         msg_hook.append(msg.transpose(1, 0))
         # all_msgs[:,:,-8,:] = all_msgs[:,:,-8,:]*0
         # Edge2node, Aggregate all msgs to receiver
         # agg_msg size [bs, pred_steps, #node, self.msg_out_shape=256]
+
         agg_msgs = all_msgs.transpose(-2, -1).matmul(rel_rec).transpose(-2, -1)
         agg_msgs = agg_msgs.contiguous()
 
@@ -110,10 +113,11 @@ class MLPDecoder_Causal(nn.Module):
 
         # Output MLP
         pred = F.dropout(F.relu(self.out_fc1(aug_inputs)), p=self.dropout_prob)
+        # import pdb
+        # pdb.set_trace()
         pred = F.dropout(F.relu(self.out_fc2(pred)), p=self.dropout_prob)
         # in:256, out:1
         pred = self.out_fc3(pred)
-
         # Predict position/velocity difference
         return single_timestep_inputs + pred
 

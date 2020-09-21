@@ -11,10 +11,10 @@ def train_val_control(args, log_prior, logger, optimizer, save_folder, train_loa
         train_log (int, optional): When the amount of data seen divides train_log, do a log. Defaults to 5.
         val_log (int, optional): Similar to above. Defaults to 1.
     """
-    # if data_trained == 0:
-    #     print('Doing initial validation before training...')
-    #     val_control(
-    #         args, log_prior, logger, save_folder, valid_data_loader, -1, decoder, rel_rec, rel_send)
+    if data_trained == 0:
+        print('Doing initial validation before training...')
+        val_control(
+            args, log_prior, logger, save_folder, valid_data_loader, -1, decoder, rel_rec, rel_send)
 
     t = time.time()
     nll_train = []
@@ -44,8 +44,7 @@ def train_val_control(args, log_prior, logger, optimizer, save_folder, train_loa
             ), all_data[1].cuda(), all_data[2].cuda()
             output, logits, msg_hook = decoder(data, rel_rec, rel_send,
                                                args.temp, args.hard, args.prediction_steps, [])
-            import pdb
-            pdb.set_trace()
+
             if args.control_constraint != 0:
                 control_constraint_loss = control_loss(
                     msg_hook, which_node, args.input_atoms, args.variations)*args.control_constraint
@@ -59,7 +58,8 @@ def train_val_control(args, log_prior, logger, optimizer, save_folder, train_loa
             output, logits, msg_hook = decoder(data, rel_rec, rel_send,
                                                args.temp, args.hard, args.prediction_steps, [])
             control_constraint_loss = torch.zeros(1).cuda()
-
+        # import pdb
+        # pdb.set_trace()
         data_trained += data.size(0)
         prob = my_softmax(logits, -1)
         # data: bs, #node, #timesteps, dim
@@ -105,7 +105,7 @@ def train_val_control(args, log_prior, logger, optimizer, save_folder, train_loa
             print(batch_idx)
             print('Train', control_constraint_loss.item(),
                   loss_kl.item(), loss_nll.item(), loss_nll_lasttwo.item(), loss_nll_lasttwo_series[0].item())
-            if args.gt_A is False:
+            if (not args.gt_A) and (not args.all_connect):
                 rel_graphs.append(decoder.rel_graph.detach().cpu().numpy())
                 rel_graphs_grad.append(
                     decoder.rel_graph.grad.detach().cpu().numpy())

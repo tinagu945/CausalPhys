@@ -28,9 +28,10 @@ def control_loss(msg_hook, control_nodes, input_nodes, variations):
         mask[:, i, :, control_nodes[i], :] = 0
     loss = mask*var.view(msg_hook.size(
         0), msg_hook.size(1), num_nodes, num_nodes, -1)
-    
+    # import pdb
+    # pdb.set_trace()
     # normalizer = mean.sum().item()
-    return loss.sum()/(batch_size)  # *normalizer)
+    return loss.sum()/(batch_size)  # *msg_hook.size(0)
 
 
 def control_loss_1(msg_hook, control_nodes, input_nodes, variations):
@@ -309,17 +310,21 @@ def kl_categorical_uniform(preds, num_atoms, num_edge_types, add_const=False,
 
 
 def nll_gaussian(preds, target, variance, add_const=False):
+    # Target size: (bs, num_nodes, trajectory_len, dim)
     neg_log_p = ((preds - target) ** 2 / (2 * variance))
     if add_const:
         const = 0.5 * np.log(2 * np.pi * variance)
         neg_log_p += const
     # loss of one whole trajectory
+    # import pdb
+    # pdb.set_trace()
     return neg_log_p.sum() / (target.size(0) * target.size(1)), neg_log_p.sum((0, 1, 3)) / (target.size(0) * target.size(1))
 
 
 def edge_accuracy(preds, target):
     _, preds = preds.max(-1)
-#     import pdb;pdb.set_trace()
+    # import pdb
+    # pdb.set_trace()
     correct = preds.float().data.eq(
         target.float().data.view_as(preds)).cpu().sum()
     return np.float(correct) / (target.size(0) * target.size(1))

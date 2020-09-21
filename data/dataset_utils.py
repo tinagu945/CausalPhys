@@ -22,7 +22,7 @@ def update_ALDataset(dataset, new_data, which_nodes, batch_size):
     return new_ds
 
 
-def load_one_graph_data(suffix, control=False, self_loop=False, size=None, **kwargs):
+def load_one_graph_data(suffix, train_data=None, control=False, self_loop=False, size=None, **kwargs):
     print('loading', suffix)
     feat = np.load('data/datasets/feat_'+suffix + '.npy')
     if size:
@@ -31,13 +31,34 @@ def load_one_graph_data(suffix, control=False, self_loop=False, size=None, **kwa
 
     mins, maxs = [], []
     num_atoms = feat.shape[1]
-    # Normalize all 0th values to[-1, 1] (the following vector is one-hot indicating identity, so not normalized.)
-    for i in range(num_atoms):
-        mmax = np.max(feat[:, i, :, 0])
-        mmin = np.min(feat[:, i, :, 0])
-        mins.append(mmin)
-        maxs.append(mmax)
-        feat[:, i, :, 0] = (feat[:, i, :, 0] - mmin)*2/(mmax-mmin)-1
+
+    # for i in range(6):
+    #     print('before')
+    #     print(set(feat[:, i, 0, 0]))
+    # print('\n')
+    if not train_data:
+        # Normalize all 0th values to[-1, 1] (the following vector is one-hot indicating identity, so not normalized.)
+        print('Using the dataset itself\'s max and min for normalization')
+        for i in range(num_atoms):
+            mmax = np.max(feat[:, i, :, 0])
+            mmin = np.min(feat[:, i, :, 0])
+            mins.append(mmin)
+            maxs.append(mmax)
+            feat[:, i, :, 0] = (feat[:, i, :, 0] - mmin)*2/(mmax-mmin)-1
+    else:
+        # Use train_data's max and min for normalization
+        print('Using the train dataset\'s max and min for normalization')
+        for i in range(num_atoms):
+            mmax = np.max(feat[:, i, :, 0])
+            mmin = np.min(feat[:, i, :, 0])
+            mins.append(mmin)
+            maxs.append(mmax)
+            feat[:, i, :, 0] = (feat[:, i, :, 0] - train_data.mins[i]) * \
+                2/(train_data.maxs[i]-train_data.mins[i])-1
+
+    # for i in range(6):
+    #     print(set(feat[:, i, 0, 0]))
+    # print('\n')
 
     edge = np.reshape(edge, [-1, num_atoms ** 2])
     edge = np.array((edge + 1) / 2, dtype=np.int64)

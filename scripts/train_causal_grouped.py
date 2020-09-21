@@ -22,7 +22,7 @@ from data.dataset_utils import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=42, help='Random seed.')
-parser.add_argument('--epochs', type=int, default=1000,
+parser.add_argument('--epochs', type=int, default=200,
                     help='Number of epochs to train.')
 parser.add_argument('--train-bs', type=int, default=144,
                     help='Number of samples per batch during training.')
@@ -30,7 +30,7 @@ parser.add_argument('--val-bs', type=int, default=128,
                     help='Number of samples per batch during validation and test.')
 parser.add_argument('--lr', type=float, default=1e-4,
                     help='Initial learning rate.')
-parser.add_argument('--decoder-hidden', type=int, default=512,
+parser.add_argument('--decoder-hidden', type=int, default=256,
                     help='Number of hidden units.')
 parser.add_argument('--temp', type=float, default=0.5,
                     help='Temperature for Gumbel softmax.')
@@ -48,9 +48,9 @@ parser.add_argument('--edge-types', type=int, default=2,
                     help='The number of edge types to infer.')
 parser.add_argument('--dims', type=int, default=9,
                     help='The number of input dimensions (position + velocity).')
-parser.add_argument('--timesteps', type=int, default=19,
+parser.add_argument('--timesteps', type=int, default=40,
                     help='The number of time steps per sample.')
-parser.add_argument('--prediction-steps', type=int, default=19, metavar='N',
+parser.add_argument('--prediction-steps', type=int, default=20, metavar='N',
                     help='Num steps to predict before re-using teacher forcing.')
 parser.add_argument('--lr-decay', type=int, default=40,
                     help='After how epochs to decay LR by a factor of gamma.')
@@ -92,6 +92,12 @@ parser.add_argument('--control-constraint', type=float, default=0.0,
                     help='Coefficient for control constraint loss')
 parser.add_argument('--gt-A', action='store_true', default=False,
                     help='Whether use the ground truth adjacency matrix, useful for debuging the encoder.')
+parser.add_argument('--train-log-freq', type=int, default=10,
+                    help='The number of input dimensions (position + velocity).')
+parser.add_argument('--val-log-freq', type=int, default=5,
+                    help='The number of input dimensions (position + velocity).')
+parser.add_argument('--all-connect', action='store_true', default=False,
+                    help='Whether the adjancency matrix is fully connected and not trainable.')
 
 args = parser.parse_args()
 args.num_atoms = args.input_atoms+args.target_atoms
@@ -99,7 +105,7 @@ args.script = 'train_causal_grouped'
 if args.val_suffix is None:
     print('args.val_suffix is None, so will be the same as args.suffix', args.suffix)
     args.val_suffix = args.suffix
-if args.gt_A:
+if args.gt_A or args.all_connect:
     print('Using ground truth A and kl loss will be omitted')
     args.kl = 0
 
@@ -169,21 +175,21 @@ def main():
         assert args.train_bs % args.variations == 0, "Grouping training set requires args.traing-bs integer times of args.variations"
 
         train_data = load_one_graph_data(
-            'train_causal_vel_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=args.grouped, control_nodes=args.input_atoms, variations=args.variations, need_grouping=args.need_grouping)
+            'train_causal_vel_'+args.suffix, train_data=None, size=args.train_size, self_loop=args.self_loop, control=args.grouped, control_nodes=args.input_atoms, variations=args.variations, need_grouping=args.need_grouping)
         train_sampler = RandomPytorchSampler(train_data)
         train_data_loader = DataLoader(
             train_data, batch_size=args.train_bs, shuffle=False, sampler=train_sampler)
 
     else:
         train_data = load_one_graph_data(
-            'train_causal_vel_'+args.suffix, size=args.train_size, self_loop=args.self_loop, control=args.grouped)
+            'train_causal_vel_'+args.suffix, train_data=None, size=args.train_size, self_loop=args.self_loop, control=args.grouped)
         train_data_loader = DataLoader(
             train_data, batch_size=args.train_bs, shuffle=True)
 
     if args.val_grouped:
         # To see control loss, val and test should be grouped
         valid_data = load_one_graph_data(
-            'valid_causal_vel_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.val_variations, need_grouping=args.val_need_grouping)
+            'valid_causal_vel_'+args.val_suffix, train_data=train_data, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.val_variations, need_grouping=args.val_need_grouping)
         valid_sampler = RandomPytorchSampler(valid_data)
         valid_data_loader = DataLoader(
             valid_data, batch_size=args.val_bs, shuffle=False, sampler=valid_sampler)
@@ -195,7 +201,7 @@ def main():
         #     test_data, batch_size=args.val_bs, shuffle=False, sampler=test_sampler)
     else:
         valid_data = load_one_graph_data(
-            'valid_causal_vel_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=False)
+            'valid_causal_vel_'+args.val_suffix, train_data=train_data, size=args.val_size, self_loop=args.self_loop, control=False)
         valid_data_loader = DataLoader(
             valid_data, batch_size=args.val_bs, shuffle=True)
         # test_data = load_one_graph_data(
@@ -210,7 +216,7 @@ def main():
         # TODO: when len(train_dataset) reaches budget, force stop
         # print('#batches in train_dataset', len(train_dataset)/args.train_bs)
         data_trained = train_val_control(args, log_prior, logger, optimizer, save_folder,
-                                         train_data_loader, valid_data_loader, decoder, rel_rec, rel_send, data_trained, train_log=train_data.data.shape[0]*10, val_log=train_data.data.shape[0]*3, dataset_size=train_data.data.shape[0])
+                                         train_data_loader, valid_data_loader, decoder, rel_rec, rel_send, data_trained, train_log=train_data.data.shape[0]*args.train_log_freq, val_log=train_data.data.shape[0]*args.val_log_freq, dataset_size=train_data.data.shape[0])
         scheduler.step()
     print("Optimization Finished!")
     print("Best Epoch: {:04d}".format(logger.best_epoch))

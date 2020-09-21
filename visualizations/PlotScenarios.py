@@ -55,7 +55,7 @@ class AbstractPlotScenario(object):
             print(i, trajectory[0][i]*scale, trajectory[1][i]*scale)
             fig = plt.figure(figsize=(8, 8))
             pos_1 = trajectory[0][i]*scale
-            im, draw, start = self.draw_background(**kwargs)
+            im, draw, start, _ = self.draw_background(**kwargs)
             self.draw_trajectory(draw, start, pos_1,
                                  'hsl(%d, %d%%, %d%%)' % self.gt_hsl, **kwargs)
             pos_2 = trajectory[1][i]*scale
@@ -63,32 +63,33 @@ class AbstractPlotScenario(object):
                                  'hsl(%d, %d%%, %d%%)' % self.pred_hsl, **kwargs)
             fig.suptitle('Blue ground truth, red prediction.')
             plt.imshow(im)
-            fig.savefig('temp.png')
-            images.append(Image.open('temp.png'))
+            fig.savefig(os.path.join(folder, 'temp.png'))
+            images.append(Image.open(os.path.join(folder, 'temp.png')))
         if save:
-            images[0].save('_'.join([folder, suffix, str(batch_ind), 'cube_stack.gif']),
+            images[0].save(os.path.join(folder, '_'.join([suffix, str(batch_ind), 'cube_stack.gif'])),
                            save_all=True, append_images=images[1:], optimize=False, duration=self.duration, loop=0)
         return images
 
 
 class Plot_FrictionSliding(AbstractPlotScenario):
-    def __init__(self, im_size, duration=400, cube_len=30, gt_hsl=(180, 100, 50), pred_hsl=(0, 100, 50), slope_len=500):
+    def __init__(self, im_size, duration=400, cube_len=30, gt_hsl=(180, 100, 50), pred_hsl=(0, 100, 50)):
         AbstractPlotScenario.__init__(
             self, im_size, duration, cube_len, gt_hsl, pred_hsl)
-        self.slope_len = slope_len
+        # self.slope_len = slope_len
 
     def draw_background(self, theta=None, line_width=5):
         #theta in degree
         #     theta = theta * np.pi/180
-        start_x = 50
-        start_y = 50
-        end_x = start_x+int(self.slope_len)
-        end_y = start_y+int(self.slope_len*np.tan(theta))
+        start_x = self.im_size[0]//8
+        start_y = self.im_size[0]//8
+        slope_len = int((self.im_size[0]//4)/np.sin(theta))
+        end_x = start_x+int(slope_len)
+        end_y = start_y+int(slope_len*np.tan(theta))
         im = Image.new('RGB', (end_x+start_x, end_y+start_y), (255, 255, 255))
         draw = ImageDraw.Draw(im)
         draw.line([(start_x, start_y), (end_x, end_y)],
                   width=line_width, fill=(0, 0, 0))
-        return im, draw, (start_x, start_y)
+        return im, draw, (start_x, start_y), slope_len
 
     def draw_trajectory(self, draw, start, pos, fill, theta=None):
         #     theta = theta * np.pi/180
@@ -115,7 +116,7 @@ class Plot_FrictionlessSHO(AbstractPlotScenario):
             self, im_size, duration, cube_len, gt_hsl, pred_hsl)
 
     def draw_background(self, line_width=5):
-        start_x = self.im_size[0]//8
+        start_x = self.im_size[0]//2
         start_y = 7*(self.im_size[1]//8)
         im = Image.new('RGB', self.im_size, (255, 255, 255))
         draw = ImageDraw.Draw(im)
@@ -154,7 +155,7 @@ class Plot_AirFall(AbstractPlotScenario):
 
     def draw_trajectory(self, draw, start, pos, fill):
         cx = start[0]
-        cy = start[1]+pos-np.abs(y_offset)
+        cy = start[1]+pos
 
         x_ll = cx-self.cube_len/2
         y_ll = cy+self.cube_len/2

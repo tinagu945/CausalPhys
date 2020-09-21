@@ -23,6 +23,7 @@ class AbstractScenario(object):
     def rollout_func(self, permutations):
         raise NotImplementedError
 
+
 class FrictionSliding(AbstractScenario):
     def __init__(self, num_inputs, num_outputs, interval, trajectory_len, delta):
         AbstractScenario.__init__(
@@ -43,7 +44,7 @@ class FrictionSliding(AbstractScenario):
         outputs = np.zeros((inputs.shape[0], self.num_outputs,
                             self.trajectory_len, 1))
         outputs[:, 1, 0, 0] = inputs[:, 5, 0, 0]
-
+        # print(np.nonzero(self.g*(np.sin(theta)-np.cos(theta)*mu) < 0))
         for i in range(1, self.trajectory_len):
             outputs[:, 0, i, 0] = outputs[:, 0, i-1, 0] + \
                 self.g*(np.sin(theta)-np.cos(theta)*mu)
@@ -74,7 +75,7 @@ class AirFall(AbstractScenario):
         # rho = inputs[:, 0, 0, 0]
         # area = inputs[:, 2, 0, 0]
         # rho*area/2  # C_d defaults to 1 since it's not measurable
-        c = inputs[:, 0, 0, 0]
+        c = inputs[:, 0, 0, 0]  # In this notation, terminal vel=sqrt(m*g/c)
         # 2 outputs: vel and loc
         outputs = np.zeros((inputs.shape[0], self.num_outputs,
                             self.trajectory_len, 1))
@@ -107,6 +108,7 @@ class FrictionlessSHO(AbstractScenario):
         m = inputs[:, 3, 0, 0]
         k = inputs[:, 4, 0, 0]
         omega = np.sqrt(k/m)
+        # print(set(omega))
         # print(2*np.pi/omega)
         outputs = np.zeros((inputs.shape[0], self.num_outputs,
                             self.trajectory_len, 1))
@@ -131,4 +133,3 @@ class FrictionlessSHO(AbstractScenario):
         # outputs[:, 1, :, 0] += inputs[:, 5, :, 0]
 
         return inputs, outputs
-
