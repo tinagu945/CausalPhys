@@ -1,7 +1,6 @@
 """Train data like Interpretable Physics"""
 import time
 import argparse
-import pickle
 import os
 import datetime
 import sys
@@ -13,7 +12,8 @@ from torch.utils.data import DataLoader
 
 from utils.functions import *
 from models.modules_causal_vel import *
-from train import train_val_control
+from train import train_control
+from val import val_control
 from test import test_control
 from utils.logger import Logger
 from data.AL_sampler import RandomPytorchSampler
@@ -22,7 +22,7 @@ from data.dataset_utils import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=42, help='Random seed.')
-parser.add_argument('--epochs', type=int, default=200,
+parser.add_argument('--epochs', type=int, default=500,
                     help='Number of epochs to train.')
 parser.add_argument('--train-bs', type=int, default=144,
                     help='Number of samples per batch during training.')
@@ -84,9 +84,9 @@ parser.add_argument('--grouped', action='store_true', default=False,
                     help='Whether we want to do the grouped training.')
 parser.add_argument('--need-grouping', action='store_true', default=False,
                     help='If grouped is True, whether the dataset actually needs grouping.')
-parser.add_argument('--val-need-grouping', action='store_true', default=False,
+parser.add_argument('--val-need-grouping', action='store_true', default=True,
                     help='If grouped is True, whether the validation dataset actually needs grouping.')
-parser.add_argument('--val-grouped', action='store_true', default=False,
+parser.add_argument('--val-grouped', action='store_true', default=True,
                     help='Whether to group the valid and test dataset')
 parser.add_argument('--control-constraint', type=float, default=0.0,
                     help='Coefficient for control constraint loss')
@@ -102,11 +102,8 @@ parser.add_argument('--all-connect', action='store_true', default=False,
 args = parser.parse_args()
 args.num_atoms = args.input_atoms+args.target_atoms
 args.script = 'train_causal_grouped'
-if args.val_suffix is None:
-    print('args.val_suffix is None, so will be the same as args.suffix', args.suffix)
-    args.val_suffix = args.suffix
 if args.gt_A or args.all_connect:
-    print('Using ground truth A and kl loss will be omitted')
+    print('Using given graph and kl loss will be omitted')
     args.kl = 0
 
 print(args)
@@ -137,8 +134,10 @@ rel_rec = np.array(encode_onehot(np.where(off_diag)[0]), dtype=np.float32)
 rel_send = np.array(encode_onehot(np.where(off_diag)[1]), dtype=np.float32)
 rel_rec = torch.FloatTensor(rel_rec)
 rel_send = torch.FloatTensor(rel_send)
+rel_rec = rel_rec.cuda()
+rel_send = rel_send.cuda()
 
-decoder = MLPDecoder_Causal(args)
+decoder = MLPDecoder_Causal(args, rel_rec, rel_send).cuda()
 optimizer = optim.Adam(list(decoder.parameters())+[decoder.rel_graph],
                        lr=args.lr)
 scheduler = lr_scheduler.StepLR(optimizer, step_size=args.lr_decay,
@@ -158,8 +157,6 @@ log_prior = torch.unsqueeze(log_prior, 0)
 
 log_prior = log_prior.cuda()
 decoder.cuda()
-rel_rec = rel_rec.cuda()
-rel_send = rel_send.cuda()
 triu_indices = triu_indices.cuda()
 tril_indices = tril_indices.cuda()
 
@@ -168,28 +165,26 @@ def main():
     # Train model
     best_val_loss = np.inf
     best_epoch = 0
-    trajectory_len = 19
-    data_trained = 0
 
     if args.grouped:
         assert args.train_bs % args.variations == 0, "Grouping training set requires args.traing-bs integer times of args.variations"
 
-        train_data = load_one_graph_data(
-            'train_causal_vel_'+args.suffix, train_data=None, size=args.train_size, self_loop=args.self_loop, control=args.grouped, control_nodes=args.input_atoms, variations=args.variations, need_grouping=args.need_grouping)
+        train_data = OneGraphDataset.load_one_graph_data(
+            'train_causal_vel_'+args.suffix, train_data_min_max=None, size=args.train_size, self_loop=args.self_loop, control=args.grouped, control_nodes=args.input_atoms, variations=args.variations, need_grouping=args.need_grouping)
         train_sampler = RandomPytorchSampler(train_data)
         train_data_loader = DataLoader(
             train_data, batch_size=args.train_bs, shuffle=False, sampler=train_sampler)
 
     else:
-        train_data = load_one_graph_data(
-            'train_causal_vel_'+args.suffix, train_data=None, size=args.train_size, self_loop=args.self_loop, control=args.grouped)
+        train_data = OneGraphDataset.load_one_graph_data(
+            'train_causal_vel_'+args.suffix, train_data_min_max=None, size=args.train_size, self_loop=args.self_loop, control=args.grouped)
         train_data_loader = DataLoader(
             train_data, batch_size=args.train_bs, shuffle=True)
 
     if args.val_grouped:
         # To see control loss, val and test should be grouped
-        valid_data = load_one_graph_data(
-            'valid_causal_vel_'+args.val_suffix, train_data=train_data, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.val_variations, need_grouping=args.val_need_grouping)
+        valid_data = OneGraphDataset.load_one_graph_data(
+            'valid_causal_vel_'+args.val_suffix, train_data_min_max=[train_data.mins, train_data.maxs], size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.val_variations, need_grouping=args.val_need_grouping)
         valid_sampler = RandomPytorchSampler(valid_data)
         valid_data_loader = DataLoader(
             valid_data, batch_size=args.val_bs, shuffle=False, sampler=valid_sampler)
@@ -200,8 +195,8 @@ def main():
         # test_data_loader = DataLoader(
         #     test_data, batch_size=args.val_bs, shuffle=False, sampler=test_sampler)
     else:
-        valid_data = load_one_graph_data(
-            'valid_causal_vel_'+args.val_suffix, train_data=train_data, size=args.val_size, self_loop=args.self_loop, control=False)
+        valid_data = OneGraphDataset.load_one_graph_data(
+            'valid_causal_vel_'+args.val_suffix, train_data_min_max=[train_data.mins, train_data.maxs], size=args.val_size, self_loop=args.self_loop, control=False)
         valid_data_loader = DataLoader(
             valid_data, batch_size=args.val_bs, shuffle=True)
         # test_data = load_one_graph_data(
@@ -210,14 +205,25 @@ def main():
         #     test_data, batch_size=args.val_bs, shuffle=True)
 
     logger = Logger(save_folder)
-    # import pdb
-    # pdb.set_trace()
+    print('Doing initial validation before training...')
+    # val_control(
+    #     args, log_prior, logger, save_folder, valid_data_loader, -1, decoder, scheduler)
+
     for epoch in range(args.epochs):
         # TODO: when len(train_dataset) reaches budget, force stop
         # print('#batches in train_dataset', len(train_dataset)/args.train_bs)
-        data_trained = train_val_control(args, log_prior, logger, optimizer, save_folder,
-                                         train_data_loader, valid_data_loader, decoder, rel_rec, rel_send, data_trained, train_log=train_data.data.shape[0]*args.train_log_freq, val_log=train_data.data.shape[0]*args.val_log_freq, dataset_size=train_data.data.shape[0])
+        nll, nll_lasttwo, kl, mse, control_constraint_loss, lr, rel_graphs, rel_graphs_grad, a, b, c, d, e, f = train_control(
+            args, log_prior, optimizer, save_folder, train_data_loader, valid_data_loader, decoder, epoch)
+
+        if epoch % args.train_log_freq == 0:
+            logger.log('train', decoder, epoch, nll, nll_lasttwo, kl=kl, mse=mse, control_constraint_loss=control_constraint_loss, lr=lr, rel_graphs=rel_graphs,
+                       rel_graphs_grad=rel_graphs_grad, msg_hook_weights=a, nll_train_lasttwo=b, nll_train_lasttwo_5=c, nll_train_lasttwo_10=d, nll_train_lasttwo__1=e, nll_train_lasttwo_1=f)
+
+        # if epoch % args.val_log_freq == 0:
+        #     _ = val_control(
+        #         args, log_prior, logger, save_folder, valid_data_loader, epoch, decoder, scheduler)
         scheduler.step()
+
     print("Optimization Finished!")
     print("Best Epoch: {:04d}".format(logger.best_epoch))
     if args.save_folder:

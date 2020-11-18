@@ -42,3 +42,15 @@ class ControlSimulator(AbstractSimulator):
         inputs[:, control_idx:control_idx+1] = control
         inputs, targets = self.scenario.rollout_func(inputs)
         return inputs, targets
+
+
+class RolloutSimulator(AbstractSimulator):
+    """
+    Given settings of a trajectory, simply roll it out.
+    """
+
+    def __init__(self, scenario):
+        super().__init__(scenario)
+
+    def simulate(self, input_setting):
+        return self.scenario.rollout_func(input_setting)
