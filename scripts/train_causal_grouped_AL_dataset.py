@@ -164,7 +164,6 @@ log_prior = torch.FloatTensor(np.log(prior))
 log_prior = torch.unsqueeze(log_prior, 0)
 log_prior = torch.unsqueeze(log_prior, 0)
 
-
 log_prior = log_prior.cuda()
 decoder.cuda()
 rel_rec = rel_rec.cuda()

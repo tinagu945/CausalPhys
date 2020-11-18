@@ -44,7 +44,11 @@ class FrictionSliding(AbstractScenario):
         outputs = np.zeros((inputs.shape[0], self.num_outputs,
                             self.trajectory_len, 1))
         outputs[:, 1, 0, 0] = inputs[:, 5, 0, 0]
+<<<<<<< HEAD
         # print(np.nonzero(self.g*(np.sin(theta)-np.cos(theta)*mu) < 0))
+=======
+
+>>>>>>> 882e43a7558d72f4c2148f77e066e84febdf01d6
         for i in range(1, self.trajectory_len):
             outputs[:, 0, i, 0] = outputs[:, 0, i-1, 0] + \
                 self.g*(np.sin(theta)-np.cos(theta)*mu)
@@ -72,10 +76,17 @@ class AirFall(AbstractScenario):
         inputs = np.repeat(inputs, self.trajectory_len, axis=2)
 
         m = inputs[:, 4, 0, 0]
+<<<<<<< HEAD
         # rho = inputs[:, 0, 0, 0]
         # area = inputs[:, 2, 0, 0]
         # rho*area/2  # C_d defaults to 1 since it's not measurable
         c = inputs[:, 0, 0, 0]  # In this notation, terminal vel=sqrt(m*g/c)
+=======
+        rho = inputs[:, 0, 0, 0]
+        area = inputs[:, 2, 0, 0]
+        # rho*area/2  # C_d defaults to 1 since it's not measurable
+        c = inputs[:, 0, 0, 0]
+>>>>>>> 882e43a7558d72f4c2148f77e066e84febdf01d6
         # 2 outputs: vel and loc
         outputs = np.zeros((inputs.shape[0], self.num_outputs,
                             self.trajectory_len, 1))
@@ -108,13 +119,18 @@ class FrictionlessSHO(AbstractScenario):
         m = inputs[:, 3, 0, 0]
         k = inputs[:, 4, 0, 0]
         omega = np.sqrt(k/m)
+<<<<<<< HEAD
         # print(set(omega))
         # print(2*np.pi/omega)
+=======
+
+>>>>>>> 882e43a7558d72f4c2148f77e066e84febdf01d6
         outputs = np.zeros((inputs.shape[0], self.num_outputs,
                             self.trajectory_len, 1))
         outputs[:, 1, 0, 0] = inputs[:, 2, 0, 0]
 
         for i in range(1, self.trajectory_len):
+<<<<<<< HEAD
             outputs[:, 0, i, 0] = -outputs[:, 1, i-1, 0]*omega * \
                 np.sin(omega*self.interval) + \
                 outputs[:, 0, i-1, 0]*np.cos(omega*self.interval)
@@ -131,5 +147,16 @@ class FrictionlessSHO(AbstractScenario):
             #     outputs[:, 1, i, 0] = outputs[:, 1, i-1, 0] + \
             #         outputs[:, 0, i-1, 0]*self.interval
         # outputs[:, 1, :, 0] += inputs[:, 5, :, 0]
+=======
+            outputs[:, 0, i, 0] = outputs[:, 0, i-1, 0] - \
+                (omega**2)*outputs[:, 1, i-1, 0]*self.interval
+
+            if self.delta:
+                outputs[:, 1, i, 0] = outputs[:, 0, i-1, 0]*self.interval
+            else:
+                outputs[:, 1, i, 0] = outputs[:, 1, i-1, 0] + \
+                    outputs[:, 0, i-1, 0]*self.interval
+        outputs[:, 1, :, 0] += inputs[:, 5, :, 0]
+>>>>>>> 882e43a7558d72f4c2148f77e066e84febdf01d6
 
         return inputs, outputs

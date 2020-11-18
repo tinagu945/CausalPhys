@@ -12,7 +12,7 @@ class Logger(object):
         self.best_val_loss = np.inf
         self.best_epoch = -1
 
-    def log(self, mode, decoder, epoch, nll, nll_last2, rel_graphs=None, rel_graphs_grad=None, **kwargs):
+    def log(self, mode, decoder, epoch, nll, nll_last2, rel_graphs=None, rel_graphs_grad=None, scheduler=None, **kwargs):
         self.val_writer.add_scalar('nll_'+mode, nll, epoch)
         for key, value in kwargs.items():
             self.val_writer.add_scalar(key+'_'+mode, value, epoch)
@@ -34,6 +34,6 @@ class Logger(object):
                 self.best_epoch = epoch
                 print('Best model so far, saving...',
                       self.best_val_loss, self.best_epoch)
-                torch.save([decoder.state_dict(), decoder.rel_graph],
+                torch.save([decoder.state_dict(), decoder.rel_graph, scheduler.state_dict()],
                            os.path.join(
                     self.save_folder, 'best_decoder.pt'))
