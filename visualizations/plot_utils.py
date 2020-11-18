@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from utils.functions import *
 
 
-def load_predict(args, weight_path, start_ind=0, stop_ind=5):
+def load_predict(args, weight_path, start_ind=0, stop_ind=5, record=True):
     weight_path = 'logs/'+weight_path
     decoder = MLPDecoder_Causal(args).cuda()
     off_diag = np.ones([args.num_atoms, args.num_atoms])
@@ -21,17 +21,17 @@ def load_predict(args, weight_path, start_ind=0, stop_ind=5):
     rel_rec = torch.FloatTensor(rel_rec).cuda()
     rel_send = torch.FloatTensor(rel_send).cuda()
 
-    train_data = load_one_graph_data(
+    train_data = OneGraphDataset.load_one_graph_data(
         'train_causal_vel_'+args.suffix, train_data=None, size=None, self_loop=args.self_loop, control=False)
     if args.val_grouped:
         # To see control loss, val and test should be grouped
-        valid_data = load_one_graph_data(
+        valid_data = OneGraphDataset.load_one_graph_data(
             'valid_causal_vel_'+args.val_suffix, train_data=train_data, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.val_variations, need_grouping=args.val_need_grouping)
         valid_sampler = RandomPytorchSampler(valid_data)
         valid_data_loader = DataLoader(
             valid_data, batch_size=args.val_bs, shuffle=False, sampler=valid_sampler)
     else:
-        valid_data = load_one_graph_data(
+        valid_data = OneGraphDataset.load_one_graph_data(
             'valid_causal_vel_'+args.val_suffix, train_data=train_data, size=args.val_size, self_loop=args.self_loop, control=False)
         valid_data_loader = DataLoader(
             valid_data, batch_size=args.val_bs, shuffle=False)
@@ -45,12 +45,13 @@ def load_predict(args, weight_path, start_ind=0, stop_ind=5):
     # print('Loading rel_graph from', w)
     # decoder.rel_graph = torch.load(w)[1].cuda()
     decoder.rel_graph = torch.load(weight_path)[1].cuda()
+    # decoder.rel_graph[:, :, :-16, 1] = 10
 
     # decoder.rel_graph = torch.zeros([1, 1, 64, 2]).cuda()
     # # for i in [59, 48, 52, 54, 62]:
     # decoder.rel_graph[:, :, -16:, 1] = 100
-    # decoder.rel_graph[:, :, :, 0] = 100-decoder.rel_graph[:, :, :, 1]
-    print(decoder.rel_graph.softmax(-1)[:, :, -16:, :])
+    # decoder.rel_graph[:, :, :, 0] = 10-decoder.rel_graph[:, :, :, 1]
+    # print(decoder.rel_graph.softmax(-1))
     # edge_acc = edge_accuracy(decoder.rel_graph, train_data.edge)
     # print('edge accuracy at the best epoch', edge_acc)
     loss = []
@@ -60,7 +61,7 @@ def load_predict(args, weight_path, start_ind=0, stop_ind=5):
     for batch_idx, all_data in enumerate(valid_data_loader):
         if batch_idx < start_ind:
             pass
-        if batch_idx < stop_ind and batch_idx > start_ind:
+        if batch_idx < stop_ind and (batch_idx > start_ind or batch_idx == start_ind):
             if args.val_grouped:
                 # edge is only for calculating edge accuracy. Since we have not included that, edge is not used.
                 data, which_node, edge = all_data[0].cuda(
@@ -79,23 +80,24 @@ def load_predict(args, weight_path, start_ind=0, stop_ind=5):
             target = data[:, :, 1:, :]
             loss_nll, _ = nll_gaussian(
                 output[:, -2:, :, :], target[:, -2:, :, :], args.var)
-            print('Nll', loss_nll)
             loss.append(loss_nll.item())
 
-            target, output = denormalize(target, output, train_data)
-            print('Setup [shapes,colors,mus,thetas,masses,v0s]',
-                  batch_idx, target[0, :-2, 0, 0])
-            print('Velocity', batch_idx,
-                  target[0, -2, :, 0], '\n', output[0, -2, :, 0])
-            print('Position', batch_idx,
-                  target[0, -1, :, 0], '\n', output[0, -1, :, 0])
-            condition.append(target[:, :-2, 0, 0])
-            truth.append(target)
-            pred.append(output)
+            if record:
+                print('Nll', loss_nll)
+                target, output = denormalize(target, output, train_data)
+                print('Setup [shapes,colors,mus,thetas,masses,v0s]',
+                      batch_idx, target[0, :-2, 0, 0])
+                print('Velocity', batch_idx,
+                      target[0, -2, :, 0], '\n', output[0, -2, :, 0])
+                print('Position', batch_idx,
+                      target[0, -1, :, 0], '\n', output[0, -1, :, 0])
+                condition.append(target[:, :-2, 0, 0])
+                truth.append(target)
+                pred.append(output)
         elif batch_idx > stop_ind:
             break
 
-    print('Avg nll loss', np.mean(loss))
+    print('Avg nll loss', np.mean(loss), weight_path)
     return loss, truth, pred, condition, valid_data
 
 
@@ -149,7 +151,7 @@ def test():
                         help='Skip first edge type in decoder, i.e. it represents no-edge.')
     parser.add_argument('--var', type=float, default=5e-5,
                         help='Output variance.')
-    parser.add_argument('--hard', action='store_true', default=False,
+    parser.add_argument('--hard', action='store_true', default=True,
                         help='Uses discrete samples in training forward pass.')
     parser.add_argument('--self-loop', action='store_true', default=True,
                         help='Whether graph contains self loop.')
@@ -165,7 +167,7 @@ def test():
                         help='Additional info for the run.')
     parser.add_argument('--train-size', type=int, default=None,
                         help='#datapoints for train')
-    parser.add_argument('--val-size', type=int, default=None,
+    parser.add_argument('--val-size', type=int, default=4096,
                         help='#datapoints for val')
     parser.add_argument('--test-size', type=int, default=None,
                         help='#datapoints for test')
@@ -194,42 +196,57 @@ def test():
     args.num_atoms = args.input_atoms+args.target_atoms
     args.script = 'train_causal_grouped'
 
-    airfall_path = ['exp2020-09-16T16:30:52.053985_suffix_airfall_cont_40_new_val-suffix_airfall_spaced_40_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0_all-connect',
-                    'exp2020-09-17T01:22:53.259087_suffix_airfall_cont_40_new_val-suffix_airfall_spaced_40_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0_epochs_500', 'exp2020-09-16T16:29:53.485070_suffix_airfall_cont_40_new_val-suffix_airfall_spaced_40_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0_gt-A']
+    sliding_path = ['exp2020-09-29T13:00:40.339006_suffix_sliding_cont_fixedgaussian0.1_new_val-suffix_sliding_spaced_fixedgaussian0.1_new_interpolation_all-connect',
+                    'exp2020-09-29T13:01:34.100094_suffix_sliding_cont_fixedgaussian0.1_new_val-suffix_sliding_spaced_fixedgaussian0.1_new_interpolation', 'exp2020-09-29T13:02:04.713846_suffix_sliding_cont_fixedgaussian0.1_new_val-suffix_sliding_spaced_fixedgaussian0.1_new_interpolation_gt-A', 'exp2020-09-29T13:04:44.772277_suffix_sliding_cont_fixedgaussian0.1_new_val-suffix_sliding_spaced_fixedgaussian0.1_new_interpolation_gt-A_seed_1', 'exp2020-09-29T13:06:09.740529_suffix_sliding_cont_fixedgaussian0.1_new_val-suffix_sliding_spaced_fixedgaussian0.1_new_interpolation_seed_1', 'exp2020-09-29T13:07:16.690882_suffix_sliding_cont_fixedgaussian0.1_new_val-suffix_sliding_spaced_fixedgaussian0.1_new_interpolation_all-connect_seed_1', 'exp2020-10-01T02:24:35.245564_suffix_sliding_cont_fixedgaussian0.1_new_val-suffix_sliding_spaced_fixedgaussian0.1_new_interpolation_seed_2', 'exp2020-10-01T02:30:47.609654_suffix_sliding_cont_fixedgaussian0.1_new_val-suffix_sliding_spaced_fixedgaussian0.1_new_interpolation_all-connect_seed_2']
 
-    SHO_path = ['exp2020-09-15T18:50:20.605500_suffix_SHO_cont_nowall_40_new_val-suffix_SHO_spaced_nowall_40_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0_all-connect', 'exp2020-09-16T00:04:27.250003_suffix_SHO_cont_nowall_40_new_val-suffix_SHO_spaced_nowall_40_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0_epochs_500',
-                'exp2020-09-15T17:49:41.582904_suffix_SHO_cont_nowall_40_new_val-suffix_SHO_spaced_nowall_40_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0_gt-A_decoder-hidden_256']
+    airfall_path = ['exp2020-09-28T17:55:12.546640_suffix_airfall_cont_fixedgaussian0.1_new_val-suffix_airfall_spaced_fixedgaussian0.1_new_interpolation_all-connect',
+                    'exp2020-09-28T17:53:51.266094_suffix_airfall_cont_fixedgaussian0.1_new_val-suffix_airfall_spaced_fixedgaussian0.1_new_interpolation', 'exp2020-09-28T17:52:19.705827_suffix_airfall_cont_fixedgaussian0.1_new_val-suffix_airfall_spaced_fixedgaussian0.1_new_interpolation_gt-A', 'exp2020-10-01T15:45:26.180443_suffix_airfall_cont_fixedgaussian0.1_new_val-suffix_airfall_spaced_fixedgaussian0.1_new_interpolation_all-connect_seed_1', 'exp2020-10-01T15:46:27.843718_suffix_airfall_cont_fixedgaussian0.1_new_val-suffix_airfall_spaced_fixedgaussian0.1_new_interpolation_seed_1', 'exp2020-10-02T03:12:47.318536_suffix_airfall_cont_fixedgaussian0.1_new_val-suffix_airfall_spaced_fixedgaussian0.1_new_interpolation_gt-A_seed_1', 'exp2020-10-02T03:13:11.391255_suffix_airfall_cont_fixedgaussian0.1_new_val-suffix_airfall_spaced_fixedgaussian0.1_new_interpolation_gt-A_seed_2']
 
-    sliding_path = ['exp2020-09-15T18:24:09.590815_suffix_sliding_cont_40_new_val-suffix_sliding_spaced_40_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0_all-connect',
-                    'exp2020-09-16T00:05:57.409922_suffix_sliding_cont_40_new_val-suffix_sliding_spaced_40_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0_epochs_500', 'exp2020-09-15T17:35:18.518943_suffix_sliding_cont_40_new_val-suffix_sliding_spaced_40_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0_gt-A_decoder-hidden_256']
-    # args.suffix = 'airfall_cont_40_new'
-    # args.val_suffix = 'airfall_new_cont_extrapolation_0.4_0.6'
-    # args.suffix = 'SHO_cont_nowall_40_new'
-    # args.val_suffix = 'SHO_new_cont_extrapolation_0.2_0.4'
-    # # args.val_suffix = 'airfall_new_extrapolation_0.2_0.6'
-    # # args.suffix = 'sliding_cont_40_new'
-    # # args.val_suffix = 'slide_new_cont_extrapolation_0.4_0.6'
-    # # args.val_suffix = 'sliding_cont_40_new_interpolation' #160, 53
-    # best = np.inf
-    # best_epoch = 0
-    # p = SHO_path[2]
-    # try:
-    #     for i in np.linspace(100, 500, 41):
-    #         args.weight_path = p+'/'+str(int(i))+'_decoder.pt'
-    #         loss, truth, pred, condition = load_predict(
-    #             args, args.weight_path, stop_ind=np.inf)
-    #         if np.mean(loss) < best:
-    #             best = np.mean(loss)
-    #             best_epoch = i
-    #         print(i, args.weight_path, args.val_suffix, np.mean(loss))
-    # except:
-    #     print('best', best, best_epoch)
+    airfall_path_group = ['exp2020-09-28T17:56:23.373702_suffix_airfall_cont_fixedgaussian0.1_new_val-suffix_airfall_spaced_fixedgaussian0.1_new_interpolation_all-connect_grouped_control-constraint_2.0',
+                          'exp2020-09-28T17:58:15.205180_suffix_airfall_cont_fixedgaussian0.1_new_val-suffix_airfall_spaced_fixedgaussian0.1_new_interpolation_grouped_control-constraint_2.0', 'exp2020-09-28T18:00:49.162823_suffix_airfall_cont_fixedgaussian0.1_new_val-suffix_airfall_spaced_fixedgaussian0.1_new_interpolation_grouped_control-constraint_2.0_gt-A']
 
-    args.suffix = 'sliding_cont_40_new'
-    args.val_suffix = 'sliding_cont_40_new_interpolation'
-    args.weight_path = 'exp2020-09-16T00:22:32.642663_suffix_sliding_cont_40_new_val-suffix_sliding_spaced_40_new_interpolation_val-grouped_val-need-grouping_epochs_500/best_decoder.pt'
-    loss, truth, pred, condition = load_predict(
-        args, args.weight_path, stop_ind=np.inf)
+    SHO_path = ['exp2020-09-28T01:54:36.339337_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation_gt-A', 'exp2020-09-28T01:52:38.600905_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation_all-connect',
+                'exp2020-09-28T01:50:16.683673_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation', 'exp2020-10-01T02:34:08.437066_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation_all-connect_seed_2', 'exp2020-10-01T02:41:00.624098_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation_gt-A_seed_2', 'exp2020-10-01T15:28:53.840221_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation_seed_2', 'exp2020-10-01T15:29:54.618608_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation_all-connect_seed_3', 'exp2020-10-01T15:33:32.392524_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation_gt-A_seed_3', 'exp2020-10-02T02:59:38.868375_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation_seed_3']
+
+    sliding_path_group = ['exp2020-09-22T15:53:48.129713_suffix_sliding_cont_40_fixedgaussian05_new_val-suffix_sliding_spaced_40_fixedgaussian05_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0_gt-A',
+                          'exp2020-09-22T15:55:26.763593_suffix_sliding_cont_40_fixedgaussian05_new_val-suffix_sliding_spaced_40_fixedgaussian05_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0_all-connect', 'exp2020-09-23T03:24:07.427021_suffix_sliding_cont_40_fixedgaussian05_new_val-suffix_sliding_spaced_40_fixedgaussian05_new_interpolation_val-grouped_val-need-grouping_grouped_control-constraint_2.0']
+
+    SHO_path_group = ['exp2020-09-28T01:55:51.057911_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation_grouped_control-constraint_2.0',
+                      'exp2020-09-28T01:57:21.920209_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation_grouped_control-constraint_2.0_gt-A', 'exp2020-09-28T01:58:52.226227_suffix_SHO_cont_fixedgaussian0.1_new_val-suffix_SHO_spaced_fixedgaussian0.1_new_interpolation_grouped_control-constraint_2.0_all-connect']
+
+    SHO_suffix = 'SHO_cont_fixedgaussian0.1_new'
+    SHO_val_suffix = 'SHO_spaced_fixedgaussian0.1_new_interpolation'
+    # SHO_val_suffix = 'SHO_spaced_fixedgaussian0.1_new_extrapolation_0_0.2'
+    airfall_suffix = 'airfall_cont_fixedgaussian0.1_new'
+    # airfall_val_suffix = 'airfall_spaced_fixedgaussian0.1_new_interpolation'
+    airfall_val_suffix = 'airfall_spaced_fixedgaussian0.1_new_extrapolation_0.4_0.6'
+    sliding_suffix = 'sliding_cont_fixedgaussian0.1_new'
+    # sliding_val_suffix = 'sliding_spaced_fixedgaussian0.1_new_interpolation'
+    sliding_val_suffix = 'sliding_spaced_fixedgaussian0.1_new_extrapolation_0.2_0.4'
+
+    for p in sliding_path:
+        best = np.inf
+        best_epoch = 0
+        args.suffix = sliding_suffix
+        args.val_suffix = sliding_val_suffix
+        # try:
+        #     for i in np.linspace(10, 490, 49):
+        # args.weight_path = p+'/'+str(int(i))+'_decoder.pt'
+        args.weight_path = p+'/best_decoder.pt'
+        loss, truth, pred, condition, valid_data = load_predict(
+            args, args.weight_path, stop_ind=np.inf, record=False)
+        # print('loss', args.weight_path, np.mean(loss))
+        #         if np.mean(loss) < best:
+        #             best = np.mean(loss)
+        #             best_epoch = i
+        #         # print(i, args.weight_path, args.val_suffix, np.mean(loss))
+        #     print('best', best, best_epoch, p)
+        # except Exception as e:
+        #     print(e)
+        # print('best', best, best_epoch, p)
+
+    # loss, truth, pred, condition, valid_data = load_predict(
+    #     args, args.weight_path, stop_ind=np.inf)
 
 
 if __name__ == "__main__":

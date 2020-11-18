@@ -37,7 +37,7 @@ class AbstractPlotScenario(object):
     def draw_trajectory(self, *args):
         raise NotImplementedError
 
-    def draw_cube_stack(self, folder, trajectory, scale, save, batch_ind=-1, suffix='', **kwargs):
+    def draw_cube_stack(self, folder, trajectory, scale, save, batch_ind=-1, suffix='', draw_second_cube=True, title=None, **kwargs):
         """[summary]
 
         Args:
@@ -58,10 +58,17 @@ class AbstractPlotScenario(object):
             im, draw, start, _ = self.draw_background(**kwargs)
             self.draw_trajectory(draw, start, pos_1,
                                  'hsl(%d, %d%%, %d%%)' % self.gt_hsl, **kwargs)
-            pos_2 = trajectory[1][i]*scale
-            self.draw_trajectory(draw, start, pos_2,
-                                 'hsl(%d, %d%%, %d%%)' % self.pred_hsl, **kwargs)
-            fig.suptitle('Blue ground truth, red prediction.')
+            if draw_second_cube:
+                pos_2 = trajectory[1][i]*scale
+                self.draw_trajectory(draw, start, pos_2,
+                                     'hsl(%d, %d%%, %d%%)' % self.pred_hsl, **kwargs)
+            if not title:
+                fig.suptitle('Blue ground truth, red prediction.')
+            else:
+                fig.suptitle(title)
+            plt.xlim([0, self.im_size[0]])
+            plt.ylim([self.im_size[1], 0])
+            plt.autoscale(False)
             plt.imshow(im)
             fig.savefig(os.path.join(folder, 'temp.png'))
             images.append(Image.open(os.path.join(folder, 'temp.png')))
@@ -81,11 +88,12 @@ class Plot_FrictionSliding(AbstractPlotScenario):
         #theta in degree
         #     theta = theta * np.pi/180
         start_x = self.im_size[0]//8
-        start_y = self.im_size[0]//8
-        slope_len = int((self.im_size[0]//4)/np.sin(theta))
-        end_x = start_x+int(slope_len)
-        end_y = start_y+int(slope_len*np.tan(theta))
-        im = Image.new('RGB', (end_x+start_x, end_y+start_y), (255, 255, 255))
+        start_y = self.im_size[1]//8
+        # Want the slope to in the middle 3/4
+        slope_len = int((self.im_size[1]*0.75)/np.sin(theta))
+        end_x = start_x+int(slope_len*np.cos(theta))
+        end_y = 7*self.im_size[1]//8
+        im = Image.new('RGB', self.im_size, (255, 255, 255))
         draw = ImageDraw.Draw(im)
         draw.line([(start_x, start_y), (end_x, end_y)],
                   width=line_width, fill=(0, 0, 0))
@@ -122,7 +130,7 @@ class Plot_FrictionlessSHO(AbstractPlotScenario):
         draw = ImageDraw.Draw(im)
         draw.line([(0, start_y), (self.im_size[0], start_y)],
                   width=line_width, fill=(0, 0, 0))
-        return im, draw, (start_x, start_y)
+        return im, draw, (start_x, start_y), None
 
     def draw_trajectory(self, draw, start, pos, fill):
         cx = start[0]+pos
@@ -143,6 +151,7 @@ class Plot_FrictionlessSHO(AbstractPlotScenario):
 
 class Plot_AirFall(AbstractPlotScenario):
     def __init__(self, im_size, duration=400, cube_len=30, gt_hsl=(180, 100, 50), pred_hsl=(0, 100, 50)):
+        # (180, 100, 50) is color aqua.
         AbstractPlotScenario.__init__(
             self, im_size, duration, cube_len, gt_hsl, pred_hsl)
 
@@ -151,7 +160,7 @@ class Plot_AirFall(AbstractPlotScenario):
         start_y = 50
         im = Image.new('RGB', self.im_size, (255, 255, 255))
         draw = ImageDraw.Draw(im)
-        return im, draw, (start_x, start_y)
+        return im, draw, (start_x, start_y), None
 
     def draw_trajectory(self, draw, start, pos, fill):
         cx = start[0]
@@ -193,8 +202,7 @@ class Plot_Connections(AbstractPlotScenario):
         A = A.view(self.num_nodes, self.num_nodes, -1).cpu().detach().numpy()
         return A
 
-    def draw_background(self, texts=["shape", "color", "friction", "theta",
-                                     "mass", "x_0", "vel", "pos"]):
+    def draw_background(self, texts):
         r = 0.4*self.im_size[1]/(2+self.num_nodes)
         im = Image.new('RGB', self.im_size, (255, 255, 255))
         draw = ImageDraw.Draw(im)
@@ -206,26 +214,29 @@ class Plot_Connections(AbstractPlotScenario):
                 draw.ellipse((x-r, y-r, x+r, y+r),
                              fill='hsl(%d, %d%%, %d%%)' % self.gt_hsl)
                 draw.text((x-r, y-r), texts[i], fill=(0, 0, 0))
-        return im, draw
+        return im, draw, None, None
 
-    def draw_trajectory(self, draw, A, line_width, fill):
+    def draw_trajectory(self, draw, A, line_width):
         edge = A.argmax(-1)
         for i in range(len(A)):
             for j in range(len(A[0])):
                 if edge[i][j] == 1:
                     # print(A[i][j][1])
                     color = 'hsl(%d, %d%%, %d%%)' % (
-                        self.fill[0], (1-A[i][j][1])*fill[1], (1-A[i][j][1])*self.fill[1])
+                        self.pred_hsl[0], (1-A[i][j][1])*self.pred_hsl[1], (1-A[i][j][1])*self.pred_hsl[1])
                     draw.line([(self.center_xs[0], self.center_ys[j]), (self.center_xs[1], self.center_ys[i])],
                               width=line_width, fill=color)
 
-    def draw_connection_gif(self, folder, epochs, save, suffix='', line_width=3):
+    def draw_connection_gif(self, folder, epochs, save, suffix='', line_width=3, texts=["shape", "color", "friction", "theta", "mass", "x_0", "vel", "pos"]):
         images = []
+        # try:
         for i in epochs:
-            A = read_A(path, i)
-            im, draw = self.draw_background()
-            self.draw_trajectory(draw, A, line_width, self.pred_hsl)
+            A = self.read_A(folder, int(i))
+            im, draw = self.draw_background(texts)
+            self.draw_trajectory(draw, A, line_width)
             images.append(im)
+        # except:
+        #     pass
         if save:
             images[0].save('_'.join([folder, suffix, 'connection.gif']),
                            save_all=True, append_images=images[1:], optimize=False, duration=self.duration, loop=0)
