@@ -161,10 +161,12 @@ def gumbel_softmax(logits, tau=1, hard=False, eps=1e-10):
         #   subtract y_soft value)
         # - makes the gradient equal to y_soft gradient (since we strip
         #   all other gradients)
+        # Both require grad
         y = Variable(y_hard - y_soft.data) + y_soft
+        return y, y_soft
     else:
         y = y_soft
-    return y
+        return y
 
 
 def binary_accuracy(output, labels):

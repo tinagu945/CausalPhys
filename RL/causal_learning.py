@@ -200,8 +200,10 @@ memory = Memory()
 ppo = PPO(args.state_dim, args.variations, args.rl_hidden, args.rl_lr,
           betas, args.rl_gamma, args.rl_epochs, eps_clip, 4)
 
-discrete_mapping = [[0.53, 0.637, 0.745, 1.284, 1.176, 1.5], [
+discrete_mapping_grad = [[0.53, 0.637, 0.745, 1.284, 1.176, 1.5], [
     0, 0.11, 0.44, 0.77, 0.88, 1], [0, 0.11, 0.33, 0.44, 0.55, 1]]
+discrete_mapping = [lambda x: 0.53+x *
+                    (1.5-0.53)/5, lambda x: 0+x*(1-0)/5, lambda x: 0+x*(1-0)/5]
 learning_assess_data = torch.zeros((20, 8, 40, 9)).cuda()
 interval = 0.1
 delta = False
@@ -209,7 +211,7 @@ scenario = FrictionSliding(args.input_atoms, args.target_atoms,
                            interval, args.timesteps, delta, args.noise)
 simulator = RolloutSimulator(scenario)
 env = AL_env(args, decoder, optimizer, scheduler,
-             learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping)
+             learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad)
 # shape_color_mu=[[0,1,0.33,0.88,0.22,0.77], [0,1,0.44,0.55,0.33,0.88], [0,0.56,0.497,0.249,0.373, 0.06]]
 env.obj = {0: [0, 0, 0], 1: [1, 1, 0.56], 2: [0.33, 0.44, 0.497], 3: [
     0.88, 0.55, 0.249], 4: [0.22, 0.33, 0.373], 5: [0.77, 0.88, 0.06]}

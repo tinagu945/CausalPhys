@@ -3,6 +3,8 @@ import torch.nn as nn
 from torch.distributions import Categorical
 import gym
 
+from utils.functions import gumbel_softmax
+
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
@@ -61,18 +63,25 @@ class ActorCritic(nn.Module):
         """
         # state = torch.from_numpy(state).float().to(device)
         complete_action = []
+        complete_action_grad = []
 
         action_logprobs = 0
         state_feat = self.action_feature(state)
         for i in range(self.action_num-1):
-            action_probs = self.softmax(self.action_player[i](state_feat))
-            dist = Categorical(action_probs)
-            action = dist.sample()
-            action_logprobs += dist.log_prob(action)
-            complete_action.append(action.item())
+            # action_probs = self.softmax(self.action_player[i](state_feat))
+            action_onehot, action_probs = gumbel_softmax(
+                self.action_player[i](state_feat), hard=True)
+            # dist = Categorical(action_probs)
+            # action = dist.sample()
+            # action_logprobs += dist.log_prob(action)
+            action_logprobs += torch.log((action_probs*action_onehot).sum())
+            action = action_onehot[0]
+            complete_action.append(action.argmax().item())
+            complete_action_grad.append(action)
         # The last dimension is propensity score.
         complete_action.append(self.action_player[-1](state_feat).item())
-        return complete_action, action_logprobs
+        complete_action_grad.append(self.action_player[-1](state_feat)[0])
+        return complete_action_grad, complete_action, action_logprobs
 
     def evaluate(self, state, action):
         """
