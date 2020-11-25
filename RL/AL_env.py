@@ -43,16 +43,24 @@ class AL_env(object):
         # Make sure the output dim of both encoders are the same!
         self.obj_extractor = MLPEncoder(
             args, 3, 128, self.feature_dims).cuda()
+        self.obj_extractor_optimizer = optim.Adam(
+            list(self.obj_extractor.parameters()), lr=args.obj_extractor_lr)
 
         # TODO: try self.obj_data_extractor = MLPEncoder(args, 3, 64, 16).cuda()
         # Bidirectional LSTM
         self.obj_data_extractor = LSTMEncoder(
             args.num_atoms, self.feature_dims, num_direction=self.lstm_direction, batch_first=True).cuda()
+        self.obj_data_extractor_optimizer = optim.Adam(
+            list(self.obj_data_extractor.parameters()), lr=args.obj_data_extractor_lr)
+
         self.learning_assess_extractor = LSTMEncoder(
             8, self.feature_dims, num_direction=self.lstm_direction, batch_first=True).cuda()
+        self.learning_assess_extractor_optimizer = optim.Adam(list(
+            self.learning_assess_extractor.parameters()), lr=args.learning_assess_extractor_lr)
+
         # Change the shape of prediction to match with obj and data features.
-        self.learning_extractor = MLPEncoder(
-            args, args.num_atoms, self.feature_dims, self.feature_dims).cuda()
+        # self.learning_extractor = MLPEncoder(
+        #     args, args.num_atoms, self.feature_dims, self.feature_dims).cuda()
 
         self.deepset = DeepSet(mode='sum').cuda()
         self.simulator = simulator
@@ -79,10 +87,11 @@ class AL_env(object):
                         0, self.args.variations, size=num_cheap_var-1)
                     # The last is propensity score.
                     setting = np.append(setting, np.random.uniform())
-                    new_datapoint, _, _ = self.action_to_new_data([
+                    new_datapoint, query_setting, _ = self.action_to_new_data([
                         i, setting])
                     new_datapoint = torch.Tensor(new_datapoint)
-                    # self.intervene_graph(new_datapoint)
+                    _ = self.process_new_data(
+                        query_setting, new_datapoint, self.args.intervene)
                     self.obj_data[i].append(new_datapoint)
 
     def action_to_new_data(self, action, idx_grad=None, action_grad=None):
@@ -126,51 +135,78 @@ class AL_env(object):
         trajectory = merge_inputs_targets_onehot(inputs, targets)
         return trajectory, query_setting, query_setting_grad
 
-    def intervene_graph(self, action_grad, new_datapoint):
-        """[summary]
+    def process_new_data(self, action, new_datapoint, intervene):
+        """Do intervention on the rel_graph while check repeatance of the action
 
         Args:
             action ([type]): [description] contains gradient
             new_datapoint ([type]): [description] rollout of the action, no gradient.
         """
+        repeat = 0
         # new datapoint: (1, #num nodes, #steps, #dim)
-        # new_setting = new_datapoint[0, :, 0, 0]
-        new_setting = action_grad
-        # assert new_setting.requires_grad == True
-        # assert new_datapoint.requires_grad == False
-        for l in self.obj_data.values():
-            if l:
-                for d in l:
-                    setting = d[0, :-2, 0, 0].cuda()
-                    # found a single perfect intervention
-                    # if (new_setting-setting != 0).sum() == 1:
-                    # leaf variables moved into graph error
-                    # causal_node = np.where(new_setting-setting != 0)[0][0]
-                    # # found the treatment's affected nodes
-                    # caused_node = np.where(
-                    #     abs(new_datapoint[0, :, -1, 0]-d[0, :, -1, 0]) > 1e-5)[0]
-                    # edge = [causal_node +
-                    #         (i-1)*self.num_nodes for i in caused_node]
-                    # self.causal_model.rel_graph[:, :, edge, 1] += 5
-                    # self.causal_model.rel_graph[:, :, edge, 0] -= 5
-                    causal = (new_setting-setting).unsqueeze(0)
-                    m = nn.ConstantPad1d((0, 2), 0)
-                    caused = abs(
-                        new_datapoint[0, :, -1, 0]-d[0, :, -1, 0]).unsqueeze(1).cuda()
-                    # import pdb
-                    # pdb.set_trace()
-                    relations = 0.01*(m(causal)*caused).flatten()
-                    relations = torch.cat(
-                        [-relations.unsqueeze(-1), relations.unsqueeze(-1)], axis=1)
-                    # with torch.no_grad():
-                    self.causal_model.rel_graph = self.causal_model.rel_graph.clone() + \
-                        relations.unsqueeze(0).unsqueeze(0)
-                    # self.causal_model.rel_graph[0, 0, :,
-                    #                             0] = self.causal_model.rel_graph[0, 0, :, 0].clone()-relations*5
-                    # self.causal_model.rel_graph[0, 0, :,
-                    #                             1] = self.causal_model.rel_graph[0, 0, :, 1].clone()+relations*5
+        if torch.is_tensor(action) and action.requires_grad:
+            m = nn.ConstantPad1d((0, 2), 0)
+            new_setting = action
+            for l in self.obj_data.values():
+                if l:
+                    for d in l:
+                        if intervene:
+                            setting = d[0, :-2, 0, 0].cuda()
+                            causal = abs(new_setting-setting).unsqueeze(0)
+                            caused = abs(
+                                new_datapoint[0, :, -1, 0]-d[0, :, -1, 0]).unsqueeze(1).cuda()
+                            relations = (m(causal)*caused).flatten()
+                            relations_sum = relations.sum()
+                            coeff = 1e-2/relations_sum
 
-    def step(self, args, idx, action, new_datapoint):  # :action, memory):
+                            relations = torch.cat(
+                                [-coeff*relations.unsqueeze(-1), coeff*relations.unsqueeze(-1)], axis=1)
+
+                            self.causal_model.rel_graph = self.causal_model.rel_graph.clone() + \
+                                relations.unsqueeze(0).unsqueeze(0)
+
+        else:
+            with torch.no_grad():
+                new_setting = new_datapoint[0, :, 0, 0]
+                for l in self.obj_data.values():
+                    if l:
+                        for d in l:
+                            setting = d[0, :, 0, 0]
+                            if intervene:
+                                # found a single perfect intervention
+                                if (new_setting-setting != 0).sum() == 1:
+                                    a = torch.abs(new_setting-setting)
+                                    b = torch.abs(
+                                        new_datapoint[0, :, -1, 0]-d[0, :, -1, 0])
+                                    # print('a', a, 'b', b)
+                                    causal = torch.nonzero(a).item()
+                                    caused = torch.nonzero(b).flatten()
+                                    if a[causal] == b[causal]:
+                                        caused = caused[caused != causal]
+                                    # print('caused', caused, 'causal', causal)
+                                    if len(caused.numpy()) > 0:
+                                        self.causal_model.rel_graph[0,
+                                                                    0, caused*self.args.num_atoms+causal, 0] = 0
+                                        self.causal_model.rel_graph[0,
+                                                                    0, caused*self.args.num_atoms+causal, 1] = 100
+
+                            if (new_setting-setting == 0).sum() == self.args.num_atoms:
+                                repeat += 1
+
+                                # causal = abs(
+                                #     new_setting-setting).unsqueeze(0)
+                                # caused = abs(
+                                #     new_datapoint[0, :, -1, 0]-d[0, :, -1, 0]).unsqueeze(1).cuda()
+                                # relations = (causal*caused).flatten()
+                                # import pdb
+                                # pdb.set_trace()
+                                # self.causal_model.rel_graph[0, 0, :,
+                                #                             0] -= relations*5
+                                # self.causal_model.rel_graph[0, 0, :,
+                                # 1] += relations*5
+        return repeat
+
+    def step(self, idx, action, new_datapoint):  # :action, memory):
         """[summary]
 
             Args:
@@ -184,36 +220,37 @@ class AL_env(object):
         # new_datapoint is a entire rollout trajectory.
         new_datapoint = torch.Tensor(new_datapoint)
         # action should have gradient, while new_datapoint doesn't
-        self.intervene_graph(action, new_datapoint)
+        repeat = self.process_new_data(
+            action, new_datapoint, self.args.intervene)
         # print('3')
         # GPUtil.showUtilization()
+        # self.train_dataset.data size (batch_size, num_nodes, timesteps, feat_dims)
         self.obj_data[idx].append(new_datapoint)
         self.train_dataset.update(new_datapoint)
+        # print(self.train_dataset.data[:, :, 0, 0])
         train_data_loader = DataLoader(
-            self.train_dataset, batch_size=args.train_bs, shuffle=False)
-        # print('4')
-        # GPUtil.showUtilization()
+            self.train_dataset, batch_size=self.args.train_bs, shuffle=False)
+        for i in range(self.args.epochs):
+            print(str(i), "iter of epoch", self.epoch)
+            nll, nll_lasttwo, kl, mse, control_constraint_loss, lr, rel_graphs, rel_graphs_grad, a, b, c, d, e, f = train_control(
+                self.args, self.log_prior, self.causal_model_optimizer, self.save_folder, train_data_loader, self.causal_model, self.epoch)
 
-        nll, nll_lasttwo, kl, mse, control_constraint_loss, lr, rel_graphs, rel_graphs_grad, a, b, c, d, e, f = train_control(
-            args, self.log_prior, self.causal_model_optimizer, self.save_folder, train_data_loader, self.valid_data_loader, self.causal_model, self.epoch)
-        # # print('5 ')
-        # # GPUtil.showUtilization()
-
-        if self.epoch % args.train_log_freq == 0:
+        if self.epoch % self.args.train_log_freq == 0:
             self.logger.log('train', self.causal_model, self.epoch, nll, nll_lasttwo, kl=kl, mse=mse, control_constraint_loss=control_constraint_loss, lr=lr, rel_graphs=rel_graphs,
                             rel_graphs_grad=rel_graphs_grad, msg_hook_weights=a, nll_train_lasttwo=b, nll_train_lasttwo_5=c, nll_train_lasttwo_10=d, nll_train_lasttwo__1=e, nll_train_lasttwo_1=f)
 
-        # if self.epoch % args.val_log_freq == 0:
-        #     _ = val_control(
-        #         args, self.log_prior, self.logger, self.save_folder, self.valid_data_loader, self.epoch, self.causal_model, self.scheduler)
+        # val_loss = val_control(
+        #     self.args, self.log_prior, self.logger, self.save_folder, self.valid_data_loader, self.epoch, self.causal_model, self.scheduler)
         self.scheduler.step()
         val_loss = 0
 
         state = self.extract_features()
         # TODO: the penalty may also need to punish repeated queries.
-        penalty = float(val_loss)+10*len(self.train_dataset)
-        done = len(self.train_dataset) > self.args.budget
+        penalty = float(val_loss)+10*self.train_dataset.data.size(0)+100*repeat
+        done = self.train_dataset.data.size(0) > self.args.budget
         self.epoch += 1
+        print('repeat', repeat, 'val_loss', val_loss,
+              'self.train_dataset.data.size(0)', self.train_dataset.data.size(0))
         return state, -penalty, done
 
     def extract_features(self):
@@ -223,9 +260,6 @@ class AL_env(object):
         pred = pred.transpose(1, 2).detach()
         # learning_assess = self.learning_extractor(pred)
         learning_assess = pred
-        # import pdb
-        # pdb.set_trace()
-
         learning_assess_feat = torch.zeros(
             (learning_assess.size(0), 2*self.feature_dims)).cuda()
         for k in range(learning_assess.size(0)):
@@ -238,7 +272,7 @@ class AL_env(object):
 
         # (1, 2 * feature_dims)
         set_learning_assess_feat = self.deepset(
-            learning_assess_feat, axis=0, keepdim=True)
+            learning_assess_feat, axis=0, keepdim=False)
         # set_learning_assess_feat = learning_assess_feat.sum(0, keepdim=True)
         # for obj in gc.get_objects():
         #     try:
@@ -247,37 +281,35 @@ class AL_env(object):
         #     except:
         #         pass
 
-        # obj_data_features = []
-        # for i in self.obj.keys():
-        #     obj_param = torch.Tensor(self.obj[i]).cuda()
-        #     # TODO: change it to include one hot feature
-        #     # (batch, step, num_nodes), batch_first inputs
-        #     obj_traj = torch.cat(self.obj_data[i]).cuda()[
-        #         :, :, :, 0].transpose(1, 2)
-        #     obj_traj.requires_grad = False
-        #     obj_param.requires_grad = False
+        obj_data_features = []
+        for i in self.obj.keys():
+            obj_param = torch.Tensor(self.obj[i]).cuda()
+            # TODO: change it to include one hot feature
+            # (batch, step, num_nodes), batch_first inputs
+            obj_traj = torch.cat(self.obj_data[i]).cuda()[
+                :, :, :, 0].transpose(1, 2)
 
-        #     all_traj_feat = torch.zeros(
-        #         (obj_traj.size(0), 2*self.feature_dims)).cuda()
-        #     for j in range(obj_traj.size(0)):
-        #         # (seq_len, batch, num_directions * hidden_size)
-        #         out, [h, c] = self.obj_data_extractor(obj_traj[j:j+1, :, :])
-        #         unpack = out.view(-1, 1, self.lstm_direction,
-        #                           self.feature_dims)
-        #         # (batch_size, 2 * hidden_size)
-        #         all_traj_feat[j:j +
-        #                       1] = torch.cat((unpack[-1, :, 0, :], unpack[0, :, 1, :]), axis=1)
+            all_traj_feat = torch.zeros(
+                (obj_traj.size(0), 2*self.feature_dims)).cuda()
+            for j in range(obj_traj.size(0)):
+                # (seq_len, batch, num_directions * hidden_size)
+                out, [h, c] = self.obj_data_extractor(obj_traj[j:j+1, :, :])
+                unpack = out.view(-1, 1, self.lstm_direction,
+                                  self.feature_dims)
+                # (batch_size, 2 * hidden_size)
+                all_traj_feat[j:j +
+                              1] = torch.cat((unpack[-1, :, 0, :], unpack[0, :, 1, :]), axis=1)
 
-        #     set_traj_feat = self.deepset(all_traj_feat, axis=0, keepdim=True)
-        #     # (1, 3 * feature_dims)
-        #     obj_data_features.append(
-        #         torch.cat([self.obj_extractor(obj_param).unsqueeze(0), set_traj_feat], axis=1))
-        #     torch.cuda.empty_cache()
-        # import pdb
-        # pdb.set_trace()
-        obj_data_features = [torch.zeros((1, 3*self.feature_dims)).cuda()]*6
-        del out, h, c, unpack, learning_assess, learning_assess_feat
+            set_traj_feat = self.deepset(all_traj_feat, axis=0, keepdim=True)
+            # (1, 3 * feature_dims)
+            obj_data_features.append(
+                torch.cat([self.obj_extractor(obj_param).unsqueeze(0), set_traj_feat], axis=1))
+
+        # obj_data_features = [torch.zeros((1, 3*self.feature_dims)).cuda()]*6
+        del out, h, c, unpack, learning_assess, learning_assess_feat, obj_param, obj_traj, all_traj_feat, set_traj_feat, pred
         return [set_learning_assess_feat, obj_data_features]
+        # obj_data_features=torch.cat(obj_data_features).flatten()
+        # return torch.cat([set_learning_assess_feat,obj_data_features])
 
     def extract_features_1(self):
         set_learning_assess_feat = torch.zeros((1, 128)).cuda()

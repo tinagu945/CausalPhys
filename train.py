@@ -3,7 +3,7 @@ import torch
 from utils.functions import *
 
 
-def train_control(args, log_prior, optimizer, save_folder, train_loader, valid_data_loader,
+def train_control(args, log_prior, optimizer, save_folder, train_loader,
                   decoder, epoch, mask_grad=False):
 
     t = time.time()

@@ -21,22 +21,24 @@ def val_control(args, log_prior, logger, save_folder, valid_loader, epoch, decod
 
     decoder.eval()
     for batch_idx, all_data in enumerate(valid_loader):
-        if args.val_grouped:
-            data, which_node, edge = all_data[0].cuda(
-            ), all_data[1].cuda(), all_data[2].cuda()
-            # import pdb
-            # pdb.set_trace()
-            output, logits, msg_hook = decoder(data)
-            control_constraint_loss = control_loss(
-                msg_hook, which_node, args.input_atoms, args.val_variations)
-        else:
-            data, edge = all_data[0].cuda(), all_data[1].cuda()
-            output, logits, msg_hook = decoder(data)
-            control_constraint_loss = torch.zeros(1).cuda()
+        # if args.val_grouped:
+        #     data, which_node, edge = all_data[0].cuda(
+        #     ), all_data[1].cuda(), all_data[2].cuda()
+        #     # import pdb
+        #     # pdb.set_trace()
+        #     output, logits, msg_hook = decoder(data)
+        #     control_constraint_loss = control_loss(
+        #         msg_hook, which_node, args.input_atoms, args.val_variations)
+        # else:
+        #     data, edge = all_data[0].cuda(), all_data[1].cuda()
+        #     output, logits, msg_hook = decoder(data)
+        #     control_constraint_loss = torch.zeros(1).cuda()
 
-        # print('val', data[:, :-2, 0, 0])
+        data, edge = all_data[0].cuda(), all_data[1].cuda()
+        output, logits, _ = decoder(data)
+        control_constraint_loss = torch.zeros(1).cuda()
+
         prob = my_softmax(logits, -1)
-
         target = data[:, :, 1:, :]
         loss_nll, _ = nll_gaussian(output, target, args.var)
         loss_nll_lasttwo, loss_nll_lasttwo_series = nll_gaussian(
@@ -65,11 +67,11 @@ def val_control(args, log_prior, logger, save_folder, valid_loader, epoch, decod
         c_val.append(F.mse_loss(
             output[:, -3, :, :], target[:, -3, :, :]).item())
         control_val.append(control_constraint_loss.item())
-        msg_hook_mean.append(msg_hook.mean(dim=1).sum().item())
+        # msg_hook_mean.append(msg_hook.mean(dim=1).sum().item())
 
     print('Val AVG', np.mean(control_val),
           np.mean(kl_val), np.mean(nll_val), np.mean(nll_val_lasttwo))
     logger.log('val', decoder, epoch, np.mean(nll_val), np.mean(nll_val_lasttwo), scheduler=scheduler, kl=np.mean(kl_val), mse=np.mean(mse_val), a=np.mean(
-        a_val), b=np.mean(b_val), c=np.mean(c_val), control_constraint_loss=np.mean(control_val), msg_hook_weights=np.mean(msg_hook_mean), nll_val_lasttwo=np.mean(nll_val_lasttwo), nll_val_lasttwo_5=np.mean(nll_val_lasttwo_5), nll_val_lasttwo_10=np.mean(nll_val_lasttwo_10), nll_val_lasttwo__1=np.mean(nll_val_lasttwo__1), nll_val_lasttwo_1=np.mean(nll_val_lasttwo_1))
+        a_val), b=np.mean(b_val), c=np.mean(c_val), control_constraint_loss=np.mean(control_val), nll_val_lasttwo=np.mean(nll_val_lasttwo), nll_val_lasttwo_5=np.mean(nll_val_lasttwo_5), nll_val_lasttwo_10=np.mean(nll_val_lasttwo_10), nll_val_lasttwo__1=np.mean(nll_val_lasttwo__1), nll_val_lasttwo_1=np.mean(nll_val_lasttwo_1))  # msg_hook_weights=np.mean(msg_hook_mean),
 
     return np.mean(nll_val)

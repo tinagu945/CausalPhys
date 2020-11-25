@@ -1,9 +1,11 @@
 """Train data like Interpretable Physics"""
+import pdb
 import time
 import argparse
 import os
 import datetime
 import sys
+import itertools
 
 import torch.optim as optim
 from torch.optim import lr_scheduler
@@ -26,9 +28,9 @@ from data.scenarios import FrictionSliding
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=42, help='Random seed.')
-parser.add_argument('--epochs', type=int, default=500,
-                    help='Number of epochs to train.')
-parser.add_argument('--rl_epochs', type=int, default=500,
+parser.add_argument('--epochs', type=int, default=10,
+                    help='Number of epochs to train every time RL adds a new datapoint.')
+parser.add_argument('--rl-epochs', type=int, default=500,
                     help='Number of epochs to train the rl policy inside each epoch of learning.')
 parser.add_argument('--train-bs', type=int, default=10,
                     help='Number of samples per batch during training.')
@@ -95,27 +97,47 @@ parser.add_argument('--control-constraint', type=float, default=0.0,
 parser.add_argument('--gt-A', action='store_true', default=False,
                     help='Whether use the ground truth adjacency matrix, useful for debuging the encoder.')
 parser.add_argument('--train-log-freq', type=int, default=10,
-                    help='The number of input dimensions (position + velocity).')
+                    help='How many epochs every logging for causal model training.')
 parser.add_argument('--val-log-freq', type=int, default=5,
-                    help='The number of input dimensions (position + velocity).')
+                    help='How many epochs every logging for causal model validating.')
+parser.add_argument('--rl-log-freq', type=int, default=5,
+                    help='How many epochs every logging for rl training.')
 parser.add_argument('--all-connect', action='store_true', default=False,
                     help='Whether the adjancency matrix is fully connected and not trainable.')
-
+parser.add_argument('--solved-reward', type=float, default=-500,
+                    help='Stop the entire training (end episodes) of PPO if avg_reward > solved_reward')
+parser.add_argument('--extractors-update-epoch', type=int, default=20,
+                    help='How many epochs every gradient descent for feature extractors.')
+parser.add_argument('--rl-update-timestep', type=int, default=10,
+                    help='How many epochs every gradient descent for PPO policy.')
+parser.add_argument('--rl-max-timesteps', type=int, default=1000,
+                    help='How many times the PPO policy can try for each episode.')
 parser.add_argument('--rl-lr', type=float, default=0.002,
                     help='lr to train the rl policy')
+parser.add_argument('--obj-extractor-lr', type=float, default=1e-3,
+                    help='lr to train the obj_extractor')
+parser.add_argument('--obj-data-extractor-lr', type=float, default=1e-3,
+                    help='lr to train the obj_data_extractor')
+parser.add_argument('--learning-assess-extractor-lr', type=float, default=1e-3,
+                    help='lr to train the learning_assess_extractor')
+
 parser.add_argument('--rl-gamma', type=float, default=0.99,
                     help='discount factor of the rl policy')
 parser.add_argument('--rl-hidden', type=int, default=64,
                     help='Number of hidden units for the policy network.')
-parser.add_argument('--extract-feat-dim', type=int, default=64,
+parser.add_argument('--extract-feat-dim', type=int, default=32,
                     help='Hidden dimension for obj_extractor, obj_data_extractor, learning_extractor and learning_assess_extractor.')
-parser.add_argument('--budget', type=int, default=100,
+parser.add_argument('--budget', type=int, default=1000,
                     help='If the causal model queried for more data than budget, env reset.')
-parser.add_argument('--initial_obj_num', type=int, default=6,
-                    help='State dimension of the MDP.')
+parser.add_argument('--initial_obj_num', type=int, default=216,
+                    help='.')
 # TODO:
 parser.add_argument('--noise', action='store_true', default=False,
                     help='Whether the simulator adds noise to training data.')
+parser.add_argument('--action_requires_grad', action='store_true', default=False,
+                    help='Whether the action needs gradient for intervene_graph.')
+parser.add_argument('--intervene', action='store_true', default=False,
+                    help='Whether do the intervention when there exists paired data.')
 
 args = parser.parse_args()
 assert args.train_bs == args.val_bs
@@ -213,42 +235,31 @@ simulator = RolloutSimulator(scenario)
 env = AL_env(args, decoder, optimizer, scheduler,
              learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad)
 # shape_color_mu=[[0,1,0.33,0.88,0.22,0.77], [0,1,0.44,0.55,0.33,0.88], [0,0.56,0.497,0.249,0.373, 0.06]]
-env.obj = {0: [0, 0, 0], 1: [1, 1, 0.56], 2: [0.33, 0.44, 0.497], 3: [
-    0.88, 0.55, 0.249], 4: [0.22, 0.33, 0.373], 5: [0.77, 0.88, 0.06]}
-# env.init_train_data(data_num_per_obj=1)
+values = [[0, 1, 0.888, 0.333, 0.222, 0.777], [0, 1, 0.333,
+                                               0.444, 0.555, 0.888], [0, 0.56, 0.248, 0.062, 0.497, 0.373]]
+all_obj = np.array(list(itertools.product(*values)))
+env.obj = {i: list(all_obj[i]) for i in range(len(all_obj))}
+# pdb.set_trace()
+# env.obj = {0: [0, 0, 0], 1: [1, 1, 0.56], 2: [0.33, 0.44, 0.497], 3: [
+#     0.88, 0.55, 0.249], 4: [0.22, 0.33, 0.373], 5: [0.77, 0.88, 0.06]}
 
 
 def main():
     # Train model
     best_val_loss = np.inf
     best_epoch = 0
-    print('Doing initial validation before training...')
-    # val_rl(
-    #     args, log_prior, logger, save_folder, valid_data_loader, -1, decoder, rel_rec, rel_send, scheduler)
+    train_rl(env, memory, ppo)
 
-    for epoch in range(args.epochs):
-        nll, nll_lasttwo, kl, mse, control_constraint_loss, lr, rel_graphs, rel_graphs_grad, a, b, c, d, e, f = train_rl(
-            args, env, memory, ppo)
+    # print("Optimization Finished!")
+    # print("Best Epoch: {:04d}".format(logger.best_epoch))
+    # if args.save_folder:
+    #     print("Best Epoch: {:04d}".format(logger.best_epoch), file=meta_file)
+    #     meta_file.flush()
 
-        if epoch % args.train_log_freq == 0:
-            logger.log('train', decoder, epoch, nll, nll_lasttwo, kl=kl, mse=mse, control_constraint_loss=control_constraint_loss, lr=lr, rel_graphs=rel_graphs,
-                       rel_graphs_grad=rel_graphs_grad, msg_hook_weights=a, nll_train_lasttwo=b, nll_train_lasttwo_5=c, nll_train_lasttwo_10=d, nll_train_lasttwo__1=e, nll_train_lasttwo_1=f)
-
-        if epoch % args.val_log_freq == 0:
-            _ = val_control(
-                args, log_prior, logger, save_folder, valid_data_loader, epoch, decoder, rel_rec, rel_send, scheduler)
-        scheduler.step()
-
-    print("Optimization Finished!")
-    print("Best Epoch: {:04d}".format(logger.best_epoch))
-    if args.save_folder:
-        print("Best Epoch: {:04d}".format(logger.best_epoch), file=meta_file)
-        meta_file.flush()
-
-    test_control(test_data_loader)
-    if meta_file is not None:
-        print(save_folder)
-        meta_file.close()
+    # test_control(test_data_loader)
+    # if meta_file is not None:
+    #     print(save_folder)
+    #     meta_file.close()
 
 
 if __name__ == "__main__":

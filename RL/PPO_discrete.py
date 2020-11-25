@@ -67,20 +67,18 @@ class ActorCritic(nn.Module):
 
         action_logprobs = 0
         state_feat = self.action_feature(state)
-        for i in range(self.action_num-1):
+        for i in range(self.action_num):
+            # Use gumbel softmax to replace categorical sampling.
             # action_probs = self.softmax(self.action_player[i](state_feat))
-            action_onehot, action_probs = gumbel_softmax(
-                self.action_player[i](state_feat), hard=True)
             # dist = Categorical(action_probs)
             # action = dist.sample()
             # action_logprobs += dist.log_prob(action)
+            action_onehot, action_probs = gumbel_softmax(
+                self.action_player[i](state_feat), hard=True)
             action_logprobs += torch.log((action_probs*action_onehot).sum())
             action = action_onehot[0]
             complete_action.append(action.argmax().item())
             complete_action_grad.append(action)
-        # The last dimension is propensity score.
-        complete_action.append(self.action_player[-1](state_feat).item())
-        complete_action_grad.append(self.action_player[-1](state_feat)[0])
         return complete_action_grad, complete_action, action_logprobs
 
     def evaluate(self, state, action):
@@ -93,6 +91,7 @@ class ActorCritic(nn.Module):
         state_feat = self.action_feature(state)
         for i in range(self.action_num-1):
             action_probs = self.action_layer[i](state_feat)
+            # TODO: change to gumbel softmax
             dist = Categorical(action_probs)
             action_logprobs += dist.log_prob(action)
             dist_entropy += dist.entropy()
@@ -120,7 +119,7 @@ class PPO:
 
         self.MseLoss = nn.MSELoss()
 
-    def update(self, memory):
+    def update(self, env, memory):
         # Update the action and value player controling the ith action type
         # Monte Carlo estimate of state rewards:
         rewards = []
@@ -141,7 +140,7 @@ class PPO:
         old_logprobs = torch.stack(memory.logprobs).to(device).detach()
 
         # Optimize policy for K epochs:
-        for _ in range(self.K_epochs):
+        for i in range(self.K_epochs):
             # Evaluating old actions and values :
             logprobs, state_values, dist_entropy = self.policy.evaluate(
                 old_states, old_actions)
@@ -158,9 +157,19 @@ class PPO:
                 self.MseLoss(state_values, rewards) - 0.01*dist_entropy
 
             # take gradient step
+            print('updating!')
             self.optimizer.zero_grad()
+            env.obj_extractor_optimizer.zero_grad()
+            env.obj_data_extractor_optimizer.zero_grad()
+            env.learning_assess_extractor_optimizer.zero_grad()
+
             loss.mean().backward()
+
             self.optimizer.step()
+            # TODO: Doing update for both policy and state representation simultaneously. May change to 2 step in the future using args.extractors-update-epoch.
+            env.obj_extractor_optimizer.step()
+            env.obj_data_extractor_optimizer.step()
+            env.learning_assess_extractor_optimizer.step()
 
         # After updating all action types, copy new weights into old policy:
         self.policy_old.load_state_dict(self.policy.state_dict())
