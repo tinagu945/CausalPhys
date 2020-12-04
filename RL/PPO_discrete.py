@@ -25,7 +25,7 @@ class Memory:
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, state_dim, action_dim, n_latent_var, action_num):
+    def __init__(self, state_dim, action_values, n_latent_var, action_num):
         # action_num: number of action types, each has dimension=action_dim. +1 because of propensity score.
         super(ActorCritic, self).__init__()
         # actor
@@ -39,9 +39,9 @@ class ActorCritic(nn.Module):
         self.action_num = action_num
         # Since each action type is deciding by its own player, assuming indepence. TODO: fix an order and make it bayesian.
         self.action_player = []
-        for i in range(self.action_num-1):
+        for i in range(self.action_num):
             self.action_player.append(
-                nn.Linear(n_latent_var, action_dim).cuda())
+                nn.Linear(n_latent_var, len(action_values[i])).cuda())
         self.action_player.append(nn.Linear(n_latent_var, 1).cuda())
         self.softmax = nn.Softmax(dim=-1).cuda()
 
@@ -57,7 +57,7 @@ class ActorCritic(nn.Module):
     def forward(self):
         raise NotImplementedError
 
-    def act(self, state):
+    def act(self, memory, state):
         """
         Return the choice for the ith action type
         """
@@ -68,18 +68,23 @@ class ActorCritic(nn.Module):
         action_logprobs = 0
         state_feat = self.action_feature(state)
         for i in range(self.action_num):
+            action_probs = self.softmax(self.action_player[i](state_feat))
+            dist = Categorical(action_probs)
+            action = dist.sample()
+            action_logprobs += dist.log_prob(action)
+            complete_action.append(action.item())
             # Use gumbel softmax to replace categorical sampling.
-            # action_probs = self.softmax(self.action_player[i](state_feat))
-            # dist = Categorical(action_probs)
-            # action = dist.sample()
-            # action_logprobs += dist.log_prob(action)
-            action_onehot, action_probs = gumbel_softmax(
-                self.action_player[i](state_feat), hard=True)
-            action_logprobs += torch.log((action_probs*action_onehot).sum())
-            action = action_onehot[0]
-            complete_action.append(action.argmax().item())
+            # action_onehot, action_probs = gumbel_softmax(
+            #     self.action_player[i](state_feat), hard=True)
+            # action_logprobs += torch.log((action_probs*action_onehot).sum())
+            # action = action_onehot[0]
+            # complete_action.append(action.argmax().item())
             complete_action_grad.append(action)
-        return complete_action_grad, complete_action, action_logprobs
+
+        memory.states.append(state)
+        memory.actions.append(torch.Tensor(complete_action))
+        memory.logprobs.append(torch.Tensor([action_logprobs]))
+        return complete_action_grad, complete_action
 
     def evaluate(self, state, action):
         """
@@ -89,14 +94,14 @@ class ActorCritic(nn.Module):
         dist_entropy = 0
 
         state_feat = self.action_feature(state)
-        for i in range(self.action_num-1):
-            action_probs = self.action_layer[i](state_feat)
+        for i in range(self.action_num):
+            action_probs = self.action_player[i](state_feat)
             # TODO: change to gumbel softmax
             dist = Categorical(action_probs)
-            action_logprobs += dist.log_prob(action)
+            action_logprobs += dist.log_prob(action[:, i])
             dist_entropy += dist.entropy()
-        # Also need to add the propensity score here
-
+        # action_logprobs and dist_entropy size: (batch_size)
+        # state_value size: (batch_size, 1)
         state_value = self.value_player(state)
         return action_logprobs, torch.squeeze(state_value), dist_entropy
 
@@ -135,6 +140,8 @@ class PPO:
         rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-5)
 
         # convert list to tensor
+        # import pdb
+        # pdb.set_trace()
         old_states = torch.stack(memory.states).to(device).detach()
         old_actions = torch.stack(memory.actions).to(device).detach()
         old_logprobs = torch.stack(memory.logprobs).to(device).detach()
@@ -157,7 +164,6 @@ class PPO:
                 self.MseLoss(state_values, rewards) - 0.01*dist_entropy
 
             # take gradient step
-            print('updating!')
             self.optimizer.zero_grad()
             env.obj_extractor_optimizer.zero_grad()
             env.obj_data_extractor_optimizer.zero_grad()

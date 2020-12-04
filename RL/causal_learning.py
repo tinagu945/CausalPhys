@@ -7,13 +7,11 @@ import datetime
 import sys
 import itertools
 
-import torch.optim as optim
 from torch.optim import lr_scheduler
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
 from utils.functions import *
-from models.modules_causal_vel import *
 from RL.train_rl import train_rl
 # from  import val_control
 # from test import test_control
@@ -21,6 +19,7 @@ from utils.logger import Logger
 from data.AL_sampler import RandomPytorchSampler
 from data.datasets import *
 from data.dataset_utils import *
+from data.generate_dataset import generate_dataset_discrete
 from RL.PPO_discrete import *
 from AL_env import *
 from data.simulator import RolloutSimulator
@@ -50,7 +49,7 @@ parser.add_argument('--val-suffix', type=str, default=None,
                     help='Suffix for valid and testing data (e.g. "_charged".')
 parser.add_argument('--decoder-dropout', type=float, default=0.0,
                     help='Probability of an element to be zeroed.')
-parser.add_argument('--save-folder', type=str, default='logs',
+parser.add_argument('--save-folder', type=str, default='logs_RL',
                     help='Where to save the trained model and logs.')
 parser.add_argument('--edge-types', type=int, default=2,
                     help='The number of edge types to infer.')
@@ -74,8 +73,10 @@ parser.add_argument('--self-loop', action='store_true', default=True,
                     help='Whether graph contains self loop.')
 parser.add_argument('--kl', type=float, default=10,
                     help='Whether to include kl as loss.')
-parser.add_argument('--variations', type=int, default=6,
-                    help='#values for one controlled var in training dataset.')
+# parser.add_argument('--variations', type=int, default=6,
+#                     help='#values for one controlled var in training dataset.')
+parser.add_argument('--action_dim', type=int, default=4,
+                    help='Dimension of action.')
 parser.add_argument('--val-variations', type=int, default=4,
                     help='#values for one controlled var in validation dataset.')
 parser.add_argument('--target-atoms', type=int, default=2,
@@ -88,7 +89,7 @@ parser.add_argument('--val-size', type=int, default=None,
                     help='#datapoints for val')
 parser.add_argument('--test-size', type=int, default=None,
                     help='#datapoints for test')
-parser.add_argument('--val-need-grouping', action='store_true', default=True,
+parser.add_argument('--val-need-grouping', action='store_true', default=False,
                     help='If grouped is True, whether the validation dataset actually needs grouping.')
 parser.add_argument('--val-grouped', action='store_true', default=True,
                     help='Whether to group the valid and test dataset')
@@ -129,11 +130,11 @@ parser.add_argument('--extract-feat-dim', type=int, default=32,
                     help='Hidden dimension for obj_extractor, obj_data_extractor, learning_extractor and learning_assess_extractor.')
 parser.add_argument('--budget', type=int, default=1000,
                     help='If the causal model queried for more data than budget, env reset.')
-parser.add_argument('--initial_obj_num', type=int, default=216,
-                    help='.')
+parser.add_argument('--initial-obj-num', type=int, default=216,
+                    help='Number of objects available at the beginning.')
 # TODO:
-parser.add_argument('--noise', action='store_true', default=False,
-                    help='Whether the simulator adds noise to training data.')
+parser.add_argument('--noise', type=float, default=None,
+                    help='The noise the data simulator adds to training data.')
 parser.add_argument('--action_requires_grad', action='store_true', default=False,
                     help='Whether the action needs gradient for intervene_graph.')
 parser.add_argument('--intervene', action='store_true', default=False,
@@ -142,8 +143,9 @@ parser.add_argument('--intervene', action='store_true', default=False,
 args = parser.parse_args()
 assert args.train_bs == args.val_bs
 args.num_atoms = args.input_atoms+args.target_atoms
-args.script = 'train_causal_grouped'
-args.state_dim = 5*args.extract_feat_dim
+args.script = 'RL_PPO'
+args.state_dim = 3*args.extract_feat_dim * \
+    args.initial_obj_num+2*args.extract_feat_dim
 if args.gt_A or args.all_connect:
     print('Using given graph and kl loss will be omitted')
     args.kl = 0
@@ -176,12 +178,6 @@ rel_rec = np.array(encode_onehot(np.where(off_diag)[0]), dtype=np.float32)
 rel_send = np.array(encode_onehot(np.where(off_diag)[1]), dtype=np.float32)
 rel_rec = torch.FloatTensor(rel_rec).cuda()
 rel_send = torch.FloatTensor(rel_send).cuda()
-
-decoder = MLPDecoder_Causal(args, rel_rec, rel_send).cuda()
-optimizer = optim.Adam(list(decoder.parameters())+[decoder.rel_graph],
-                       lr=args.lr)
-scheduler = lr_scheduler.StepLR(optimizer, step_size=args.lr_decay,
-                                gamma=args.gamma)
 
 prior = np.array([0.9, 0.1])  # TODO: hard coded for now
 print("Using prior")
@@ -218,30 +214,39 @@ else:
 
 betas = (0.9, 0.999)
 eps_clip = 0.2
-memory = Memory()
-ppo = PPO(args.state_dim, args.variations, args.rl_hidden, args.rl_lr,
-          betas, args.rl_gamma, args.rl_epochs, eps_clip, 4)
 
-discrete_mapping_grad = [[0.53, 0.637, 0.745, 1.284, 1.176, 1.5], [
-    0, 0.11, 0.44, 0.77, 0.88, 1], [0, 0.11, 0.33, 0.44, 0.55, 1]]
-discrete_mapping = [lambda x: 0.53+x *
-                    (1.5-0.53)/5, lambda x: 0+x*(1-0)/5, lambda x: 0+x*(1-0)/5]
-learning_assess_data = torch.zeros((20, 8, 40, 9)).cuda()
+values = [[0.0, 1.0, 0.3333333333333333, 0.8888888888888888, 0.2222222222222222, 0.7777777777777777], [0.0, 1.0, 0.4444444444444444, 0.5555555555555556,
+                                                                                                       0.3333333333333333, 0.8888888888888888], [0.0, 0.56, 0.4977777777777778, 0.2488888888888889, 0.37333333333333335, 0.06222222222222223]]
+
+all_obj = [list(i) for i in list(itertools.product(*values))]
+# all_obj = [[0, 1, 1], [1, 1, 1]]
+assert args.initial_obj_num == len(all_obj)
+
+discrete_mapping = [all_obj, [0.53, 1.5, 1.2844444444444445, 1.1766666666666667, 0.7455555555555555, 0.6377777777777778], [
+    0.0, 1.0, 0.8888888888888888, 0.7777777777777777, 0.1111111111111111, 0.4444444444444444], [0.0, 1.0, 0.1111111111111111, 0.5555555555555556, 0.3333333333333333, 0.4444444444444444]]
+# discrete_mapping = [all_obj, [0.53, 0.637], [0, 0.11], [0, 0.11]]
+discrete_mapping_grad = [lambda x: 0.53+x *
+                         (1.5-0.53)/5, lambda x: 0+x*(1-0)/5, lambda x: 0+x*(1-0)/5]
+assert args.action_dim == len(discrete_mapping)
+
+memory = Memory()
+ppo = PPO(args.state_dim, discrete_mapping, args.rl_hidden, args.rl_lr,
+          betas, args.rl_gamma, args.rl_epochs, eps_clip, args.action_dim)
+
 interval = 0.1
 delta = False
 scenario = FrictionSliding(args.input_atoms, args.target_atoms,
                            interval, args.timesteps, delta, args.noise)
 simulator = RolloutSimulator(scenario)
-env = AL_env(args, decoder, optimizer, scheduler,
-             learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad)
-# shape_color_mu=[[0,1,0.33,0.88,0.22,0.77], [0,1,0.44,0.55,0.33,0.88], [0,0.56,0.497,0.249,0.373, 0.06]]
-values = [[0, 1, 0.888, 0.333, 0.222, 0.777], [0, 1, 0.333,
-                                               0.444, 0.555, 0.888], [0, 0.56, 0.248, 0.062, 0.497, 0.373]]
-all_obj = np.array(list(itertools.product(*values)))
-env.obj = {i: list(all_obj[i]) for i in range(len(all_obj))}
+learning_assess_values = [[0.5, 0.85], [0.5, 0.8], [
+    0.5, 0.2, 0.1], [0.8, 1.1, 0.7], [0.5, 0.8], [0.5, 0.8]]
 # pdb.set_trace()
-# env.obj = {0: [0, 0, 0], 1: [1, 1, 0.56], 2: [0.33, 0.44, 0.497], 3: [
-#     0.88, 0.55, 0.249], 4: [0.22, 0.33, 0.373], 5: [0.77, 0.88, 0.06]}
+learning_assess_data, learning_assess_data_noise = generate_dataset_discrete(
+    learning_assess_values, scenario, True)
+learning_assess_data = torch.from_numpy(learning_assess_data).float().cuda()
+
+env = AL_env(args, rel_rec, rel_send,
+             learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad)
 
 
 def main():

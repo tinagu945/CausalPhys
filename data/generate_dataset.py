@@ -70,20 +70,20 @@ def generate_extrapolate_data(lows, highs, min_ratio, max_ratio, low_num_variati
 
 
 def generate_dataset_discrete(values, scenario, permute):
+    # import pdb
+    # pdb.set_trace()
     num_inputs = scenario.num_inputs
     num_outputs = scenario.num_outputs
     if permute:
         permutations = np.array(list(itertools.product(*values)))
     else:
         permutations = np.array(values)
-    import pdb
-    pdb.set_trace()
     inputs, outputs = scenario.rollout_func(permutations)
     data = merge_inputs_targets_onehot(inputs, outputs)
 
-    for i in range(scenario.num_inputs):
-        print(set(data[:, i, 0, 0]))
-    print('\n')
+    # for i in range(scenario.num_inputs):
+    #     print(set(data[:, i, 0, 0]))
+    # print('\n')
 
     noise_data = None
     if scenario.add_noise is not None:

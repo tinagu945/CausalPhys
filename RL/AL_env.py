@@ -13,7 +13,7 @@ import torch.nn as nn
 
 from models.modules_causal_vel import *
 from models.RL_feature_extractors import *
-from data.generate_dataset import merge_inputs_targets_onehot
+from data.generate_dataset import merge_inputs_targets_onehot, generate_dataset_discrete
 from train import train_control
 from val import val_control
 from data.datasets import RLDataset
@@ -27,7 +27,7 @@ class AL_env(object):
     Wrap the training and testing of the causal network into an env for RL.
     """
 
-    def __init__(self, args, decoder, optimizer, scheduler, learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, edge, mins, maxs, discrete_mapping=None, discrete_mapping_grad=None, lstm_direction=2):
+    def __init__(self, args, rel_rec, rel_send, learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, edge, mins, maxs, discrete_mapping=None, discrete_mapping_grad=None, lstm_direction=2):
         self.discrete_mapping_grad = discrete_mapping_grad
         self.args = args
         self.edge = edge
@@ -36,104 +36,89 @@ class AL_env(object):
         self.epoch = 0
         self.feature_dims = self.args.extract_feat_dim
         self.learning_assess_data = learning_assess_data
-        self.causal_model = decoder
-        self.causal_model_optimizer = optimizer
+
+        self.rel_rec = rel_rec
+        self.rel_send = rel_send
         self.log_prior = log_prior
         self.lstm_direction = lstm_direction
-        # Make sure the output dim of both encoders are the same!
-        self.obj_extractor = MLPEncoder(
-            args, 3, 128, self.feature_dims).cuda()
-        self.obj_extractor_optimizer = optim.Adam(
-            list(self.obj_extractor.parameters()), lr=args.obj_extractor_lr)
-
-        # TODO: try self.obj_data_extractor = MLPEncoder(args, 3, 64, 16).cuda()
-        # Bidirectional LSTM
-        self.obj_data_extractor = LSTMEncoder(
-            args.num_atoms, self.feature_dims, num_direction=self.lstm_direction, batch_first=True).cuda()
-        self.obj_data_extractor_optimizer = optim.Adam(
-            list(self.obj_data_extractor.parameters()), lr=args.obj_data_extractor_lr)
-
-        self.learning_assess_extractor = LSTMEncoder(
-            8, self.feature_dims, num_direction=self.lstm_direction, batch_first=True).cuda()
-        self.learning_assess_extractor_optimizer = optim.Adam(list(
-            self.learning_assess_extractor.parameters()), lr=args.learning_assess_extractor_lr)
-
-        # Change the shape of prediction to match with obj and data features.
-        # self.learning_extractor = MLPEncoder(
-        #     args, args.num_atoms, self.feature_dims, self.feature_dims).cuda()
 
         self.deepset = DeepSet(mode='sum').cuda()
         self.simulator = simulator
         self.valid_data_loader = valid_data_loader
         self.logger = logger
         self.save_folder = save_folder
-        self.scheduler = scheduler
 
         self.obj_num = self.args.initial_obj_num
-        # obj idx: obj attributes tensor
-        self.obj = {}
-        # obj idx: tensor datapoints using that obj. Acts as the training pool.
-        self.obj_data = {i: [] for i in range(self.args.initial_obj_num)}
-        # matrix of size #cheap_params x num_variations, how each action index maps to a setting value. Having this implies the setting is discrete, else None implies continuous.
+        # list[i] contains all value choices for the ith attribute. #choices can be different across objects. Having this implies the setting is discrete, else None implies continuous.
         self.discrete_mapping = discrete_mapping
+        # print(self.discrete_mapping)
 
     def init_train_data(self, data_num_per_obj=1):
         # Only handles discrete case now
         if self.discrete_mapping:
             num_cheap_var = len(self.discrete_mapping)
             for i in range(self.obj_num):
+                query = [i]
                 for j in range(data_num_per_obj):
-                    setting = np.random.randint(
-                        0, self.args.variations, size=num_cheap_var-1)
-                    # The last is propensity score.
-                    setting = np.append(setting, np.random.uniform())
-                    new_datapoint, query_setting, _ = self.action_to_new_data([
-                        i, setting])
-                    new_datapoint = torch.Tensor(new_datapoint)
-                    _ = self.process_new_data(
-                        query_setting, new_datapoint, self.args.intervene)
-                    self.obj_data[i].append(new_datapoint)
+                    for k in range(1, num_cheap_var):
+                        setting = np.random.randint(
+                            0,  len(self.discrete_mapping[k]))
+                        query.append(setting)
+                idx, new_datapoint, query_setting, _ = self.action_to_new_data(
+                    query)
+                _ = self.process_new_data(
+                    query_setting, new_datapoint, self.args.intervene)
+                # import pdb
+                # pdb.set_trace()
+                self.obj_data[idx].append(new_datapoint)
 
     def action_to_new_data(self, action, idx_grad=None, action_grad=None):
         """
-        Given the action encoded with RL agent's notation, get the datapoints it represents.
+        Given the action encoded with RL agent's notation, get the datapoints it represents. Also put the new data into the training pool.
 
         Args:
             action ([type]): the obj index and the new trajectory setting action encoded with RL agent's notation.
 
-        Returns:
-            list: the obj index and the queried trajectory.
+        Returns: query setting includes the entire info of the obj.
         """
-        idx, query = action
+
         if self.discrete_mapping:
             # then the queries except the last propensity score are not actual values but index.
             query_setting = []
             query_setting_grad = []
-            for i in range(len(self.discrete_mapping)):
-                # query_setting.append(self.discrete_mapping[i][int(query[i])])
+            for i in range(1, len(self.discrete_mapping)):
+                # print(i, len(action), action[i],
+                #       len(self.discrete_mapping[i]))
+                # import pdb
+                # pdb.set_trace()
                 query_setting.append(
-                    (self.discrete_mapping[i](int(query[i]))))
-                if action_grad is not None:
-                    query_setting_grad.append(
-                        (torch.Tensor(self.discrete_mapping_grad[i]).cuda()*action_grad[i]).sum())
+                    self.discrete_mapping[i][int(action[i])])
+            #     if action_grad is not None:
+            #         query_setting_grad.append(
+            #             (torch.Tensor(self.discrete_mapping_grad[i]).cuda()*action_grad[i]).sum())
 
-            if idx_grad is not None:
-                idx_setting_grad = torch.matmul(idx_grad, torch.Tensor(
-                    list(self.obj.values())).cuda())
-                query_setting_grad = torch.cat([
-                    idx_setting_grad, torch.stack(query_setting_grad)])
+            # if idx_grad is not None:
+            #     idx_setting_grad = torch.matmul(idx_grad, torch.Tensor(
+            #         list(self.obj.values())).cuda())
+            #     query_setting_grad = torch.cat([
+            #         idx_setting_grad, torch.stack(query_setting_grad)])
 
         else:
             query_setting = list(query)
 
         # Assume the cluster of expensive, obj-related variables are before the cluster of cheap, RL-chosen variables.
-        setting_value = self.obj[idx]+query_setting
-        inputs, targets = self.simulator.simulate(np.array([setting_value]))
+        idx = int(action[0])
+        setting_value = self.discrete_mapping[0][idx]+query_setting
+
         if self.args.noise:
-            # TODO:
-            pass
-        trajectory = merge_inputs_targets_onehot(inputs, targets)
-        return trajectory, query_setting, query_setting_grad
+            _, trajectory = generate_dataset_discrete(
+                [setting_value], self.simulator.scenario, False)
+        else:
+            trajectory, _ = generate_dataset_discrete(
+                [setting_value], self.simulator.scenario, False)
+
+        trajectory = torch.Tensor(trajectory)
+        return idx, trajectory, setting_value, query_setting_grad
 
     def process_new_data(self, action, new_datapoint, intervene):
         """Do intervention on the rel_graph while check repeatance of the action
@@ -175,13 +160,20 @@ class AL_env(object):
                             if intervene:
                                 # found a single perfect intervention
                                 if (new_setting-setting != 0).sum() == 1:
+                                    self.num_intervention += 1
+                                    # If between the 2 settings, only the intervened variable have different final values, it bascially means they are not causal to anything.
                                     a = torch.abs(new_setting-setting)
                                     b = torch.abs(
                                         new_datapoint[0, :, -1, 0]-d[0, :, -1, 0])
-                                    # print('a', a, 'b', b)
                                     causal = torch.nonzero(a).item()
                                     caused = torch.nonzero(b).flatten()
                                     if a[causal] == b[causal]:
+                                        for i in range(self.args.num_atoms):
+                                            self.causal_model.rel_graph[0,
+                                                                        0, i*self.args.num_atoms+causal, 0] = 100
+                                            self.causal_model.rel_graph[0,
+                                                                        0, i*self.args.num_atoms+causal, 1] = 0
+
                                         caused = caused[caused != causal]
                                     # print('caused', caused, 'causal', causal)
                                     if len(caused.numpy()) > 0:
@@ -190,7 +182,8 @@ class AL_env(object):
                                         self.causal_model.rel_graph[0,
                                                                     0, caused*self.args.num_atoms+causal, 1] = 100
 
-                            if (new_setting-setting == 0).sum() == self.args.num_atoms:
+                            if (new_setting-setting == 0).sum().item() == self.args.num_atoms:
+                                # print('plus!', new_setting, setting)
                                 repeat += 1
 
                                 # causal = abs(
@@ -198,36 +191,37 @@ class AL_env(object):
                                 # caused = abs(
                                 #     new_datapoint[0, :, -1, 0]-d[0, :, -1, 0]).unsqueeze(1).cuda()
                                 # relations = (causal*caused).flatten()
-                                # import pdb
-                                # pdb.set_trace()
+
                                 # self.causal_model.rel_graph[0, 0, :,
                                 #                             0] -= relations*5
                                 # self.causal_model.rel_graph[0, 0, :,
                                 # 1] += relations*5
         return repeat
 
-    def step(self, idx, action, new_datapoint):  # :action, memory):
+    def step(self, idx, action, new_datapoint):
         """[summary]
 
             Args:
-                action ([type]): the obj index and the new trajectory setting action encoded with RL agent's notation.
+                action ([list]): the new trajectory setting.
 
             Returns:
                 state: [learning_assess, obj_data_features]
                 reward: - val_MSE
                 done: Whether the data budget is met. If yes, the training can end early.
             """
+        # import pdb
+        # pdb.set_trace()
         # new_datapoint is a entire rollout trajectory.
-        new_datapoint = torch.Tensor(new_datapoint)
         # action should have gradient, while new_datapoint doesn't
         repeat = self.process_new_data(
             action, new_datapoint, self.args.intervene)
         # print('3')
         # GPUtil.showUtilization()
         # self.train_dataset.data size (batch_size, num_nodes, timesteps, feat_dims)
+
         self.obj_data[idx].append(new_datapoint)
-        self.train_dataset.update(new_datapoint)
-        # print(self.train_dataset.data[:, :, 0, 0])
+        self.train_dataset.update(new_datapoint.clone())
+        # print(repeat, np.stack(self.obj_data[idx])[:, 0, :, 0, 0])
         train_data_loader = DataLoader(
             self.train_dataset, batch_size=self.args.train_bs, shuffle=False)
         for i in range(self.args.epochs):
@@ -239,18 +233,25 @@ class AL_env(object):
             self.logger.log('train', self.causal_model, self.epoch, nll, nll_lasttwo, kl=kl, mse=mse, control_constraint_loss=control_constraint_loss, lr=lr, rel_graphs=rel_graphs,
                             rel_graphs_grad=rel_graphs_grad, msg_hook_weights=a, nll_train_lasttwo=b, nll_train_lasttwo_5=c, nll_train_lasttwo_10=d, nll_train_lasttwo__1=e, nll_train_lasttwo_1=f)
 
-        # val_loss = val_control(
-        #     self.args, self.log_prior, self.logger, self.save_folder, self.valid_data_loader, self.epoch, self.causal_model, self.scheduler)
+        val_loss = val_control(
+            self.args, self.log_prior, self.logger, self.save_folder, self.valid_data_loader, self.epoch, self.causal_model, self.scheduler)
         self.scheduler.step()
-        val_loss = 0
+        # val_loss = 0
 
         state = self.extract_features()
         # TODO: the penalty may also need to punish repeated queries.
-        penalty = float(val_loss)+10*self.train_dataset.data.size(0)+100*repeat
+        penalty = float(val_loss)+self.train_dataset.data.size(0)+100*repeat
         done = self.train_dataset.data.size(0) > self.args.budget
-        self.epoch += 1
+
+        self.logger.val_writer.add_scalar(
+            'RL_train_dataset_size', self.train_dataset.data.size(0), self.epoch)
+        self.logger.val_writer.add_scalar('RL_repeat', repeat, self.epoch)
+        self.logger.val_writer.add_scalar(
+            'RL_num_intervention', self.num_intervention, self.epoch)
+        self.logger.val_writer.add_scalar('RL_penalty', penalty, self.epoch)
         print('repeat', repeat, 'val_loss', val_loss,
               'self.train_dataset.data.size(0)', self.train_dataset.data.size(0))
+        self.epoch += 1
         return state, -penalty, done
 
     def extract_features(self):
@@ -307,9 +308,8 @@ class AL_env(object):
 
         # obj_data_features = [torch.zeros((1, 3*self.feature_dims)).cuda()]*6
         del out, h, c, unpack, learning_assess, learning_assess_feat, obj_param, obj_traj, all_traj_feat, set_traj_feat, pred
-        return [set_learning_assess_feat, obj_data_features]
-        # obj_data_features=torch.cat(obj_data_features).flatten()
-        # return torch.cat([set_learning_assess_feat,obj_data_features])
+        obj_data_features = torch.cat(obj_data_features).flatten()
+        return torch.cat([set_learning_assess_feat, obj_data_features])
 
     def extract_features_1(self):
         set_learning_assess_feat = torch.zeros((1, 128)).cuda()
@@ -317,8 +317,39 @@ class AL_env(object):
         return [set_learning_assess_feat, obj_data_features]
 
     def reset(self, data_num_per_obj=1):
-        # TODO: for fixed object case, no need to reinit self.obj
-        # self.obj = {}
+        self.num_intervention = 0
+        self.causal_model = decoder = MLPDecoder_Causal(
+            self.args, self.rel_rec, self.rel_send).cuda()
+        self.causal_model_optimizer = optim.Adam(list(self.causal_model.parameters())+[self.causal_model.rel_graph],
+                                                 lr=self.args.lr)
+        self.scheduler = lr_scheduler.StepLR(self.causal_model_optimizer, step_size=self.args.lr_decay,
+                                             gamma=self.args.gamma)
+        # Make sure the output dim of both encoders are the same!
+        self.obj_extractor = MLPEncoder(
+            self.args, 3, 128, self.feature_dims).cuda()
+        self.obj_extractor_optimizer = optim.Adam(
+            list(self.obj_extractor.parameters()), lr=self.args.obj_extractor_lr)
+
+        # TODO: try self.obj_data_extractor = MLPEncoder(args, 3, 64, 16).cuda()
+        # Bidirectional LSTM
+        self.obj_data_extractor = LSTMEncoder(
+            self.args.num_atoms, self.feature_dims, num_direction=self.lstm_direction, batch_first=True).cuda()
+        self.obj_data_extractor_optimizer = optim.Adam(
+            list(self.obj_data_extractor.parameters()), lr=self.args.obj_data_extractor_lr)
+
+        self.learning_assess_extractor = LSTMEncoder(
+            8, self.feature_dims, num_direction=self.lstm_direction, batch_first=True).cuda()
+        self.learning_assess_extractor_optimizer = optim.Adam(list(
+            self.learning_assess_extractor.parameters()), lr=self.args.learning_assess_extractor_lr)
+
+        # Change the shape of prediction to match with obj and data features.
+        # self.learning_extractor = MLPEncoder(
+        #     args, args.num_atoms, self.feature_dims, self.feature_dims).cuda()
+
+        # obj idx: obj attributes tensor
+        self.obj = {i: self.discrete_mapping[0][i]
+                    for i in range(self.args.initial_obj_num)}
+        # obj idx: tensor datapoints using that obj. Acts as the training pool.
         self.obj_data = {i: [] for i in range(self.obj_num)}
         self.init_train_data(data_num_per_obj=data_num_per_obj)
         train_data = []
