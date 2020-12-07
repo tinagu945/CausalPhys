@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
 from utils.functions import *
-from RL.train_rl import train_rl
+from RL.train_PPO import train_rl
 # from  import val_control
 # from test import test_control
 from utils.logger import Logger
@@ -21,7 +21,7 @@ from data.datasets import *
 from data.dataset_utils import *
 from data.generate_dataset import generate_dataset_discrete
 from RL.PPO_discrete import *
-from AL_env import *
+from AL.AL_env import *
 from data.simulator import RolloutSimulator
 from data.scenarios import FrictionSliding
 

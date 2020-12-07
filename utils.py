@@ -4,7 +4,6 @@ from torch.utils.data.dataset import TensorDataset
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch.autograd import Variable
-from data.control_dataset import ControlDataset
 
 
 def my_softmax(input, axis=1):
@@ -116,7 +115,6 @@ def binary_accuracy(output, labels):
     return correct / len(labels)
 
 
-
 def to_2d_idx(idx, num_cols):
     idx = np.array(idx, dtype=np.int64)
     y_idx = np.array(np.floor(idx / float(num_cols)), dtype=np.int64)
@@ -181,8 +179,8 @@ def get_minimum_distance(data):
     data = data[:, :, :, :2].transpose(1, 2)
     data_norm = (data ** 2).sum(-1, keepdim=True)
     dist = data_norm + \
-           data_norm.transpose(2, 3) - \
-           2 * torch.matmul(data, data.transpose(2, 3))
+        data_norm.transpose(2, 3) - \
+        2 * torch.matmul(data, data.transpose(2, 3))
     min_dist, _ = dist.min(1)
     return min_dist.view(min_dist.size(0), -1)
 
@@ -236,16 +234,16 @@ def get_correct_per_bucket_(bucket_idx, pred, target):
 
 
 def kl_categorical(preds, log_prior, num_atoms, eps=1e-16):
-#     import pdb;pdb.set_trace()
+    #     import pdb;pdb.set_trace()
     kl_div = preds * (torch.log(preds + eps) - log_prior)
-    
+
     return kl_div.sum() / (num_atoms * preds.size(0))
 
 
 def kl_categorical_uniform(preds, num_atoms, num_edge_types, add_const=False,
                            eps=1e-16):
     kl_div = preds * torch.log(preds + eps)
-    #add_const will make it the real kl_div between preds and unif.(1/num_edge_types)                  
+    # add_const will make it the real kl_div between preds and unif.(1/num_edge_types)
     if add_const:
         const = np.log(num_edge_types)
         kl_div += const
@@ -253,7 +251,7 @@ def kl_categorical_uniform(preds, num_atoms, num_edge_types, add_const=False,
 
 
 def nll_gaussian(preds, target, variance, add_const=False):
-    neg_log_p = ((preds - target) ** 2 / (2 * variance))  
+    neg_log_p = ((preds - target) ** 2 / (2 * variance))
     if add_const:
         const = 0.5 * np.log(2 * np.pi * variance)
         neg_log_p += const

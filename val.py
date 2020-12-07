@@ -71,7 +71,7 @@ def val_control(args, log_prior, logger, save_folder, valid_loader, epoch, decod
 
     print('Val AVG', np.mean(control_val),
           np.mean(kl_val), np.mean(nll_val), np.mean(nll_val_lasttwo))
-    logger.log('val', decoder, epoch, np.mean(nll_val), np.mean(nll_val_lasttwo), scheduler=scheduler, kl=np.mean(kl_val), mse=np.mean(mse_val), a=np.mean(
-        a_val), b=np.mean(b_val), c=np.mean(c_val), control_constraint_loss=np.mean(control_val), nll_val_lasttwo=np.mean(nll_val_lasttwo), nll_val_lasttwo_5=np.mean(nll_val_lasttwo_5), nll_val_lasttwo_10=np.mean(nll_val_lasttwo_10), nll_val_lasttwo__1=np.mean(nll_val_lasttwo__1), nll_val_lasttwo_1=np.mean(nll_val_lasttwo_1))  # msg_hook_weights=np.mean(msg_hook_mean),
+    logger.log('val', decoder, epoch, np.mean(nll_val), np.mean(nll_val_lasttwo), scheduler=scheduler, kl_val=np.mean(kl_val), mse_val=np.mean(mse_val), a_val=np.mean(
+        a_val), b_val=np.mean(b_val), c_val=np.mean(c_val), control_constraint_loss_val=np.mean(control_val), nll_lasttwo_5_val=np.mean(nll_val_lasttwo_5), nll_lasttwo_10_val=np.mean(nll_val_lasttwo_10), nll_lasttwo__1_val=np.mean(nll_val_lasttwo__1), nll_lasttwo_1_val=np.mean(nll_val_lasttwo_1))  # msg_hook_weights=np.mean(msg_hook_mean),
 
     return np.mean(nll_val)

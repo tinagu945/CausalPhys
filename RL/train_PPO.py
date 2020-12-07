@@ -12,7 +12,8 @@ def train_rl(env, memory, ppo):
 
     # training loop
     for i_episode in range(1, env.args.rl_epochs+1):
-        state = env.reset()
+        env.reset()
+        state = env.extract_features()
         for t in range(env.args.rl_max_timesteps):
             timestep += 1
             complete_action_grad, complete_action = ppo.policy_old.act(
@@ -35,15 +36,24 @@ def train_rl(env, memory, ppo):
             else:
                 idx, new_datapoint, query_setting, _ = env.action_to_new_data(
                     complete_action)
-                state, reward, done = env.step(
+                repeat = env.process_new_data(
+                    action, new_datapoint, env.args.intervene)
+                val_loss, repeat = env.train_causal(
                     idx, query_setting, new_datapoint)
+                state, reward, done = env.step(val_loss, repeat)
+                print('repeat', repeat, 'val_loss', val_loss,
+              'self.train_dataset.data.size(0)', env.train_dataset.data.size(0))
+                env.logger.log_arbitrary(env.epoch,
+                    RLAL_train_dataset_size=env.train_dataset.data.size(0),
+                    RLAL_repeat=repeat,
+                    RLAL_num_intervention=env.num_intervention, RLAL_penalty=-reward)
 
-            # Saving reward and is_terminal:
-            memory.rewards.append(reward)
-            memory.is_terminals.append(done)
+         # Saving reward and is_terminal:
+         memory.rewards.append(reward)
+        memory.is_terminals.append(done)
 
-            # update if its time
-            if timestep % env.args.rl_update_timestep == 0:
+           # update if its time
+           if timestep % env.args.rl_update_timestep == 0:
                 ppo.update(env, memory)
                 memory.clear_memory()
                 timestep = 0

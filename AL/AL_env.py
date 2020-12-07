@@ -66,10 +66,9 @@ class AL_env(object):
                         query.append(setting)
                 idx, new_datapoint, query_setting, _ = self.action_to_new_data(
                     query)
+                # Doing intervention for overlapping objects ease the graph inference alot.
                 _ = self.process_new_data(
                     query_setting, new_datapoint, self.args.intervene)
-                # import pdb
-                # pdb.set_trace()
                 self.obj_data[idx].append(new_datapoint)
 
     def action_to_new_data(self, action, idx_grad=None, action_grad=None):
@@ -89,8 +88,7 @@ class AL_env(object):
             for i in range(1, len(self.discrete_mapping)):
                 # print(i, len(action), action[i],
                 #       len(self.discrete_mapping[i]))
-                # import pdb
-                # pdb.set_trace()
+
                 query_setting.append(
                     self.discrete_mapping[i][int(action[i])])
             #     if action_grad is not None:
@@ -160,6 +158,8 @@ class AL_env(object):
                             if intervene:
                                 # found a single perfect intervention
                                 if (new_setting-setting != 0).sum() == 1:
+                                    # import pdb
+                                    # pdb.set_trace()
                                     self.num_intervention += 1
                                     # If between the 2 settings, only the intervened variable have different final values, it bascially means they are not causal to anything.
                                     a = torch.abs(new_setting-setting)
@@ -183,7 +183,6 @@ class AL_env(object):
                                                                     0, caused*self.args.num_atoms+causal, 1] = 100
 
                             if (new_setting-setting == 0).sum().item() == self.args.num_atoms:
-                                # print('plus!', new_setting, setting)
                                 repeat += 1
 
                                 # causal = abs(
@@ -198,7 +197,7 @@ class AL_env(object):
                                 # 1] += relations*5
         return repeat
 
-    def step(self, idx, action, new_datapoint):
+    def train_causal(self, idx, action, new_datapoint):
         """[summary]
 
             Args:
@@ -209,13 +208,6 @@ class AL_env(object):
                 reward: - val_MSE
                 done: Whether the data budget is met. If yes, the training can end early.
             """
-        # import pdb
-        # pdb.set_trace()
-        # new_datapoint is a entire rollout trajectory.
-        # action should have gradient, while new_datapoint doesn't
-        repeat = self.process_new_data(
-            action, new_datapoint, self.args.intervene)
-        # print('3')
         # GPUtil.showUtilization()
         # self.train_dataset.data size (batch_size, num_nodes, timesteps, feat_dims)
 
@@ -226,32 +218,27 @@ class AL_env(object):
             self.train_dataset, batch_size=self.args.train_bs, shuffle=False)
         for i in range(self.args.epochs):
             print(str(i), "iter of epoch", self.epoch)
-            nll, nll_lasttwo, kl, mse, control_constraint_loss, lr, rel_graphs, rel_graphs_grad, a, b, c, d, e, f = train_control(
+            nll, nll_lasttwo, kl, mse, control_constraint_loss, lr, rel_graphs, rel_graphs_grad, a, b, c, d, e = train_control(
                 self.args, self.log_prior, self.causal_model_optimizer, self.save_folder, train_data_loader, self.causal_model, self.epoch)
 
         if self.epoch % self.args.train_log_freq == 0:
-            self.logger.log('train', self.causal_model, self.epoch, nll, nll_lasttwo, kl=kl, mse=mse, control_constraint_loss=control_constraint_loss, lr=lr, rel_graphs=rel_graphs,
-                            rel_graphs_grad=rel_graphs_grad, msg_hook_weights=a, nll_train_lasttwo=b, nll_train_lasttwo_5=c, nll_train_lasttwo_10=d, nll_train_lasttwo__1=e, nll_train_lasttwo_1=f)
+            self.logger.log('train', self.causal_model, self.epoch, nll, nll_lasttwo, kl_train=kl, mse_train=mse, control_constraint_loss_train=control_constraint_loss, lr_train=lr, rel_graphs=rel_graphs,
+                            rel_graphs_grad=rel_graphs_grad, msg_hook_weights_train=a, nll_lasttwo_5_train=b, nll_lasttwo_10_train=c, nll_lasttwo__1_train=d, nll_lasttwo_1_train=e)
 
+        # val_dataset should be continuous, more coverage
         val_loss = val_control(
             self.args, self.log_prior, self.logger, self.save_folder, self.valid_data_loader, self.epoch, self.causal_model, self.scheduler)
-        self.scheduler.step()
         # val_loss = 0
-
-        state = self.extract_features()
-        # TODO: the penalty may also need to punish repeated queries.
-        penalty = float(val_loss)+self.train_dataset.data.size(0)+100*repeat
-        done = self.train_dataset.data.size(0) > self.args.budget
-
-        self.logger.val_writer.add_scalar(
-            'RL_train_dataset_size', self.train_dataset.data.size(0), self.epoch)
-        self.logger.val_writer.add_scalar('RL_repeat', repeat, self.epoch)
-        self.logger.val_writer.add_scalar(
-            'RL_num_intervention', self.num_intervention, self.epoch)
-        self.logger.val_writer.add_scalar('RL_penalty', penalty, self.epoch)
-        print('repeat', repeat, 'val_loss', val_loss,
-              'self.train_dataset.data.size(0)', self.train_dataset.data.size(0))
+        self.scheduler.step()
         self.epoch += 1
+        return val_loss
+
+    def step(self, val_loss, repeat):
+        state = self.extract_features()
+        # Not punishing repetitions.
+        # penalty = float(val_loss)+1
+        penalty = float(val_loss)+self.train_dataset.data.size(0) + 100*repeat
+        done = self.train_dataset.data.size(0) > self.args.budget
         return state, -penalty, done
 
     def extract_features(self):
@@ -351,6 +338,7 @@ class AL_env(object):
                     for i in range(self.args.initial_obj_num)}
         # obj idx: tensor datapoints using that obj. Acts as the training pool.
         self.obj_data = {i: [] for i in range(self.obj_num)}
+
         self.init_train_data(data_num_per_obj=data_num_per_obj)
         train_data = []
         for i in self.obj_data.values():
@@ -358,4 +346,3 @@ class AL_env(object):
                 train_data.append(j)
         self.train_dataset = RLDataset(
             torch.cat(train_data), self.edge, self.mins, self.maxs)
-        return self.extract_features()

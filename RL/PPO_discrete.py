@@ -40,6 +40,7 @@ class ActorCritic(nn.Module):
         # Since each action type is deciding by its own player, assuming indepence. TODO: fix an order and make it bayesian.
         self.action_player = []
         for i in range(self.action_num):
+            # maybe more layers
             self.action_player.append(
                 nn.Linear(n_latent_var, len(action_values[i])).cuda())
         self.action_player.append(nn.Linear(n_latent_var, 1).cuda())

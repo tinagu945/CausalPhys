@@ -40,7 +40,7 @@ class AbstractSampler(object):
         return NotImplementedError()
 
 
-class AbstractDatasetSampler(AbstractSampler):
+class AbstractControlDatasetSampler(AbstractSampler):
     def __init__(self, dataset, args):
         assert isinstance(
             dataset, ControlOneGraphDataset), "To use dataset sampler, the dataset must be controlled!"
@@ -95,7 +95,8 @@ class AbstractDatasetSampler(AbstractSampler):
         return torch.LongTensor(idx).cuda()
 
 
-class MaximalEntropyDatasetSampler(AbstractDatasetSampler):
+# 2 Dataset samplers
+class MaximalEntropyControlDatasetSampler(AbstractControlDatasetSampler):
     def __init__(self, dataset, args):
         super().__init__(dataset, args)
 
@@ -118,7 +119,7 @@ class MaximalEntropyDatasetSampler(AbstractDatasetSampler):
         return available_nodes[:k]
 
 
-class RandomDatasetSampler(AbstractDatasetSampler):
+class RandomControlDatasetSampler(AbstractControlDatasetSampler):
     """
     Samples groups from an existing dataset, instead of generating data on the fly by a simulator.
     """
@@ -131,43 +132,44 @@ class RandomDatasetSampler(AbstractDatasetSampler):
         return np.random.randint(low=0, high=num_nodes, size=k).tolist()
 
 
-# class MaximalEntropySimulatorSampler(AbstractSampler):
-#     def __init__(self, simulator):
-#         self.simulator = simulator
+class AbstractControlSimulatorSampler(AbstractSampler):
+    def __init__(self, simulator):
+        assert isinstance(
+            simulator, ControlSimulator), "To use control simulator sampler, the simulator must be controlled!"
+        self.simulator = simulator
 
-#     def criterion(self, dist):
-#         num_nodes = int(np.sqrt(dist.size(2)))
-#         graph_uncertainty = Categorical(
-#             logits=dist).entropy().view((num_nodes, num_nodes))
-#         control_node = graph_uncertainty.sum(0).abs().argmax(-1)
-#         return control_node.item()
+    def criterion(self, dist):
+        return NotImplementedError()
 
-#     def sample(self, control_node, batch_size):
-#         """
-#         Choose the node that causes maximal average uncertainty to other nodes
-#         dist: size (num_nodes**2, num_cls), assuming self-loops. The ith node's influence is on
-#         the ith column of the adjacency matrix, so the indices are [i:num_nodes**2::num_nodes]
-#         """
-#         inputs, targets = self.simulator.simulate(control_node, batch_size)
-#         control_node = torch.LongTensor([control_node]).expand(batch_size, 1)
-#         return self.simulator.merge_inputs_targets_onehot(inputs, targets), control_node
+    def sample(self, control_node, batch_size):
+        """
+        Choose the node that causes maximal average uncertainty to other nodes
+        dist: size (num_nodes**2, num_cls), assuming self-loops. The ith node's influence is on
+        the ith column of the adjacency matrix, so the indices are [i:num_nodes**2::num_nodes]
+        """
+        inputs, targets = self.simulator.simulate(control_node, batch_size)
+        control_node = torch.LongTensor([control_node]).expand(batch_size, 1)
+        return self.simulator.merge_inputs_targets_onehot(inputs, targets), control_node
 
 
-# class RandomSimulatorSampler(AbstractSampler):
-#     # TODO: not tested
-#     def __init__(self, simulator):
-#         self.simulator = simulator
+# 2 Simulator samplers
+class MaximalEntropyControlSimulatorSampler(AbstractControlSimulatorSampler):
+    def __init__(self, dataset, args):
+        super().__init__(dataset, args)
 
-#     def criterion(self, dist):
-#         num_nodes = int(np.sqrt(dist.size(2)))
-#         return np.random.randint(low=0, high=num_nodes)
+    def criterion(self, dist):
+        num_nodes = int(np.sqrt(dist.size(0)))
+        graph_uncertainty = Categorical(
+            probs=dist).entropy().resize((num_nodes, num_nodes))
+        control_node = graph_uncertainty.sum(1).argmax(-1)
+        return control_node.item()
 
-#     def sample(self, control_node, batch_size):
-#         """
-#         Choose the node that causes maximal average uncertainty to other nodes
-#         dist: size (num_nodes**2, num_cls), assuming self-loops. The ith node's influence is on
-#         the ith column of the adjacency matrix, so the indices are [i:num_nodes**2::num_nodes]
-#         """
-#         inputs, targets = self.simulator.simulate(control_node, batch_size)
-#         control_node = torch.LongTensor([control_node]).expand(batch_size, 1)
-#         return self.simulator.merge_inputs_targets_onehot(inputs, targets), control_node
+
+class RandomControlSimulatorSampler(AbstractControlSimulatorSampler):
+    # TODO: not tested
+    def __init__(self, dataset, args):
+        super().__init__(dataset, args)
+
+    def criterion(self, dist):
+        num_nodes = int(np.sqrt(dist.size(2)))
+        return np.random.randint(low=0, high=num_nodes)

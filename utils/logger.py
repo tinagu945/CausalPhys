@@ -12,10 +12,16 @@ class Logger(object):
         self.best_val_loss = np.inf
         self.best_epoch = -1
 
-    def log(self, mode, decoder, epoch, nll, nll_last2, rel_graphs=None, rel_graphs_grad=None, scheduler=None, **kwargs):
-        self.val_writer.add_scalar('nll_'+mode, nll, epoch)
+    # TODO: add mode
+    def log_arbitrary(self, epoch, **kwargs):
         for key, value in kwargs.items():
-            self.val_writer.add_scalar(key+'_'+mode, value, epoch)
+            self.val_writer.add_scalar(key, value, epoch)
+
+    def log(self, mode, decoder, epoch, nll, nll_last2, rel_graphs=None, rel_graphs_grad=None, scheduler=None, **kwargs):
+        self.log_arbitrary(epoch, **kwargs)
+        self.val_writer.add_scalar('nll_'+mode, nll, epoch)
+        self.val_writer.add_scalar('nll_lasttwo_'+mode, nll_last2, epoch)
+
         print(self.save_folder)
         if mode == 'train':
             torch.save([decoder.state_dict(), decoder.rel_graph], os.path.join(

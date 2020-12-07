@@ -15,10 +15,6 @@ class AbstractSimulator(object):
 
 
 class ControlSimulator(AbstractSimulator):
-    """
-    Used for AL
-    """
-
     def __init__(self, scenario, lows, highs):
         """
         low: list of length #input_nodes. The lowest value an input var can take, ordered as input nodes.
@@ -30,6 +26,9 @@ class ControlSimulator(AbstractSimulator):
         self.highs = highs
 
     def simulate(self, control_idx, batch_size):
+        """
+        Given the index of a intervened node, return a group of datapoints with only that node's value constant across all datapoints.
+        """
         inputs = []
         for i in range(self.scenario.num_inputs):
             inputs.append(
