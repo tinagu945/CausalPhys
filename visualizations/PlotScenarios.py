@@ -4,7 +4,6 @@ from PIL import Image, ImageFont, ImageDraw
 import matplotlib.pyplot as plt
 import os
 from models.modules_causal_vel import *
-from data.AL_sampler import RandomPytorchSampler
 from data.datasets import *
 from data.dataset_utils import *
 import argparse
@@ -37,7 +36,7 @@ class AbstractPlotScenario(object):
     def draw_trajectory(self, *args):
         raise NotImplementedError
 
-    def draw_cube_stack(self, folder, trajectory, scale, save, batch_ind=-1, suffix='', draw_second_cube=True, title=None, **kwargs):
+    def draw_cube_stack(self, trajectory, scale, save=False, batch_ind=-1, suffix='', draw_second_cube=True, title=None, folder='visualizations', **kwargs):
         """[summary]
 
         Args:
@@ -55,7 +54,7 @@ class AbstractPlotScenario(object):
             print(i, trajectory[0][i]*scale, trajectory[1][i]*scale)
             fig = plt.figure(figsize=(8, 8))
             pos_1 = trajectory[0][i]*scale
-            im, draw, start, _ = self.draw_background(**kwargs)
+            im, draw, start = self.draw_background(**kwargs)
             self.draw_trajectory(draw, start, pos_1,
                                  'hsl(%d, %d%%, %d%%)' % self.gt_hsl, **kwargs)
             if draw_second_cube:
@@ -63,7 +62,7 @@ class AbstractPlotScenario(object):
                 self.draw_trajectory(draw, start, pos_2,
                                      'hsl(%d, %d%%, %d%%)' % self.pred_hsl, **kwargs)
             if not title:
-                fig.suptitle('Blue ground truth, red prediction.')
+                fig.suptitle('Red ground truth, blue prediction.')
             else:
                 fig.suptitle(title)
             plt.xlim([0, self.im_size[0]])
@@ -79,27 +78,25 @@ class AbstractPlotScenario(object):
 
 
 class Plot_FrictionSliding(AbstractPlotScenario):
-    def __init__(self, im_size, duration=400, cube_len=30, gt_hsl=(180, 100, 50), pred_hsl=(0, 100, 50)):
+    def __init__(self, im_size, duration=400, cube_len=30, pred_hsl=(180, 100, 50), gt_hsl=(0, 100, 50)):
         AbstractPlotScenario.__init__(
             self, im_size, duration, cube_len, gt_hsl, pred_hsl)
         # self.slope_len = slope_len
 
-    def draw_background(self, theta=None, line_width=5):
+    def draw_background(self, slope_slide_len, theta, line_width=5):
         #theta in degree
         #     theta = theta * np.pi/180
         start_x = self.im_size[0]//8
         start_y = self.im_size[1]//8
-        # Want the slope to in the middle 3/4
-        slope_len = int((self.im_size[1]*0.75)/np.sin(theta))
-        end_x = start_x+int(slope_len*np.cos(theta))
-        end_y = 7*self.im_size[1]//8
+        end_x = start_x+int(slope_slide_len*np.cos(theta))
+        end_y = start_y + int(slope_slide_len*np.sin(theta))
         im = Image.new('RGB', self.im_size, (255, 255, 255))
         draw = ImageDraw.Draw(im)
         draw.line([(start_x, start_y), (end_x, end_y)],
                   width=line_width, fill=(0, 0, 0))
-        return im, draw, (start_x, start_y), slope_len
+        return im, draw, (start_x, start_y)
 
-    def draw_trajectory(self, draw, start, pos, fill, theta=None):
+    def draw_trajectory(self, draw, start, pos, fill, theta):
         #     theta = theta * np.pi/180
         cx = start[0]+pos*np.cos(theta)
         cy = start[1]+pos*np.sin(theta)
@@ -117,9 +114,44 @@ class Plot_FrictionSliding(AbstractPlotScenario):
         draw.polygon([(x_ul, y_ul), (x_lr, y_lr),
                       (x_ll, y_ll), (x_ur, y_ur)], fill=fill)
 
+    def draw_cube_stack(self, trajectory, slope_slide_len, theta, save=False, batch_ind=-1, folder='visualizations', scale=None, suffix='', draw_second_cube=True, title=None, **kwargs):
+        """
+        slope_slide_len: length of the slope itself, not projected to any axis.
+        """
+        images = []
+        if scale is None:
+            scale = slope_slide_len / \
+                (max(trajectory[0][-1], trajectory[1][-1])+self.cube_len)
+        for i in range(trajectory.shape[1]):
+            print(i, trajectory[0][i]*scale, trajectory[1][i]*scale)
+            fig = plt.figure(figsize=(8, 8))
+            pos_1 = trajectory[0][i]*scale
+            im, draw, start = self.draw_background(
+                slope_slide_len, theta, **kwargs)
+            self.draw_trajectory(draw, start, pos_1,
+                                 'hsl(%d, %d%%, %d%%)' % self.gt_hsl, theta,  **kwargs)
+            if draw_second_cube:
+                pos_2 = trajectory[1][i]*scale
+                self.draw_trajectory(draw, start, pos_2,
+                                     'hsl(%d, %d%%, %d%%)' % self.pred_hsl, theta, **kwargs)
+            if not title:
+                fig.suptitle('Red ground truth, blue prediction.')
+            else:
+                fig.suptitle(title)
+            plt.xlim([0, self.im_size[0]])
+            plt.ylim([self.im_size[1], 0])
+            plt.autoscale(False)
+            plt.imshow(im)
+            fig.savefig(os.path.join(folder, 'temp.png'))
+            images.append(Image.open(os.path.join(folder, 'temp.png')))
+        if save:
+            images[0].save(os.path.join(folder, '_'.join([suffix, str(batch_ind), 'cube_stack.gif'])),
+                           save_all=True, append_images=images[1:], optimize=False, duration=self.duration, loop=0)
+        return images
+
 
 class Plot_FrictionlessSHO(AbstractPlotScenario):
-    def __init__(self, im_size, duration=400, cube_len=30, gt_hsl=(180, 100, 50), pred_hsl=(0, 100, 50)):
+    def __init__(self, im_size, duration=400, cube_len=30, pred_hsl=(180, 100, 50), gt_hsl=(0, 100, 50)):
         AbstractPlotScenario.__init__(
             self, im_size, duration, cube_len, gt_hsl, pred_hsl)
 
@@ -130,7 +162,7 @@ class Plot_FrictionlessSHO(AbstractPlotScenario):
         draw = ImageDraw.Draw(im)
         draw.line([(0, start_y), (self.im_size[0], start_y)],
                   width=line_width, fill=(0, 0, 0))
-        return im, draw, (start_x, start_y), None
+        return im, draw, (start_x, start_y)
 
     def draw_trajectory(self, draw, start, pos, fill):
         cx = start[0]+pos
@@ -150,7 +182,7 @@ class Plot_FrictionlessSHO(AbstractPlotScenario):
 
 
 class Plot_AirFall(AbstractPlotScenario):
-    def __init__(self, im_size, duration=400, cube_len=30, gt_hsl=(180, 100, 50), pred_hsl=(0, 100, 50)):
+    def __init__(self, im_size, duration=400, cube_len=30, pred_hsl=(180, 100, 50), gt_hsl=(0, 100, 50)):
         # (180, 100, 50) is color aqua.
         AbstractPlotScenario.__init__(
             self, im_size, duration, cube_len, gt_hsl, pred_hsl)
@@ -160,7 +192,7 @@ class Plot_AirFall(AbstractPlotScenario):
         start_y = 50
         im = Image.new('RGB', self.im_size, (255, 255, 255))
         draw = ImageDraw.Draw(im)
-        return im, draw, (start_x, start_y), None
+        return im, draw, (start_x, start_y)
 
     def draw_trajectory(self, draw, start, pos, fill):
         cx = start[0]
@@ -214,7 +246,7 @@ class Plot_Connections(AbstractPlotScenario):
                 draw.ellipse((x-r, y-r, x+r, y+r),
                              fill='hsl(%d, %d%%, %d%%)' % self.gt_hsl)
                 draw.text((x-r, y-r), texts[i], fill=(0, 0, 0))
-        return im, draw, None, None
+        return im, draw, None
 
     def draw_trajectory(self, draw, A, line_width):
         edge = A.argmax(-1)

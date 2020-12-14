@@ -23,6 +23,8 @@ def merge_inputs_targets_onehot(inputs, targets):
 
 
 def get_noise_std(num_inputs, data, noise_ratio):
+    if noise_ratio is None:
+        return noise_ratio
     std = np.std(data[:, num_inputs:, :, 0], 0)
     noise = std*noise_ratio
     print('Noise to be added for all datasets',
@@ -70,8 +72,6 @@ def generate_extrapolate_data(lows, highs, min_ratio, max_ratio, low_num_variati
 
 
 def generate_dataset_discrete(values, scenario, permute):
-    # import pdb
-    # pdb.set_trace()
     num_inputs = scenario.num_inputs
     num_outputs = scenario.num_outputs
     if permute:
@@ -86,12 +86,17 @@ def generate_dataset_discrete(values, scenario, permute):
     # print('\n')
 
     noise_data = None
-    if scenario.add_noise is not None:
+    if scenario.add_noise['value'] is not None:
         noise_data = copy.deepcopy(data)
-        for node in range(num_inputs, num_inputs+num_outputs):
-            print(scenario.add_noise[node-num_inputs])
-            noise_data[:, node, :, 0] += np.random.normal(
-                0, scenario.add_noise[node-num_inputs], data[:, node, :, 0].shape)
+        if scenario.add_noise['type'] == 'gaussian':
+            for node in range(num_inputs, num_inputs+num_outputs):
+                # print('discrete',
+                #       scenario.add_noise['value'][node-num_inputs])
+                data[:, node, :, 0] += np.random.normal(
+                    0, scenario.add_noise['value'][node-num_inputs], data[:, node, :, 0].shape)
+        if scenario.add_noise['type'] == 'uniform':
+            data[:, :, :, 0] += np.random.uniform(
+                0, scenario.add_noise['value'], data[:, :, :, 0].shape)
     return data, noise_data
 
 
@@ -115,12 +120,17 @@ def generate_dataset_continuous(simulator, lows, highs, num_variations, dataset_
                  (j+1)*num_variations, :, :, :] = out
 
     noise_data = None
-    if simulator.scenario.add_noise is not None:
+    if simulator.scenario.add_noise['value'] is not None:
         noise_data = copy.deepcopy(data)
-        for node in range(num_inputs, num_inputs+num_outputs):
-            print('cont', simulator.scenario.add_noise[node-num_inputs])
-            data[:, node, :, 0] += np.random.normal(
-                0, simulator.scenario.add_noise[node-num_inputs], data[:, node, :, 0].shape)
+        if simulator.scenario.add_noise['type'] == 'gaussian':
+            for node in range(num_inputs, num_inputs+num_outputs):
+                print(
+                    'cont', simulator.scenario.add_noise['value'][node-num_inputs])
+                data[:, node, :, 0] += np.random.normal(
+                    0, simulator.scenario.add_noise['value'][node-num_inputs], data[:, node, :, 0].shape)
+        if simulator.scenario.add_noise['type'] == 'uniform':
+            data[:, :, :, 0] += np.random.uniform(
+                0, simulator.scenario.add_noise['value'], data[:, :, :, 0].shape)
 
     return data, noise_data
 
@@ -222,6 +232,7 @@ def main(scenario_name):
     valid_variations = [4]*num_inputs
     delta = False
     permute = True
+    noise_type = 'uniform'
     train_multiples = 1  # Should not be other values.
     valid_multiples = 4
     # This var is for continuous datasets only. Must be divisible by num_variations*num_inputs
@@ -250,7 +261,7 @@ def main(scenario_name):
     lows = scenario_lows[scenario_name]
     highs = scenario_highs[scenario_name]
     scenario = scenarios[scenario_name](
-        num_inputs, num_outputs, scenario_intervals[scenario_name], trajectory_len, delta, None)
+        num_inputs, num_outputs, scenario_intervals[scenario_name], trajectory_len, delta, {'type': noise_type, 'value': None})
     simulator = ControlSimulator(scenario, lows, highs)
     train_discrete_values, valid_discrete_values = split_data(
         scenario, lows, highs, train_variations, valid_variations)
@@ -258,10 +269,9 @@ def main(scenario_name):
     # Uniform the std for all datasets to be the same as discrete_train's.
     train_discrete_spaced, train_discrete_spaced_noise = generate_dataset_discrete(
         train_discrete_values, scenario, permute)
-    scenario.add_noise = get_noise_std(
+    scenario.add_noise['value'] = get_noise_std(
         num_inputs, train_discrete_spaced, scenario_noise_ratios[scenario_name])
-    import pdb
-    pdb.set_trace()
+
     # valid_discrete_spaced_interpolation, valid_discrete_spaced_interpolation_noise = generate_dataset_discrete(
     #     valid_discrete_values, scenario)
 

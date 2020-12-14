@@ -21,22 +21,18 @@ def val_control(args, log_prior, logger, save_folder, valid_loader, epoch, decod
 
     decoder.eval()
     for batch_idx, all_data in enumerate(valid_loader):
-        # if args.val_grouped:
-        #     data, which_node, edge = all_data[0].cuda(
-        #     ), all_data[1].cuda(), all_data[2].cuda()
-        #     # import pdb
-        #     # pdb.set_trace()
-        #     output, logits, msg_hook = decoder(data)
-        #     control_constraint_loss = control_loss(
-        #         msg_hook, which_node, args.input_atoms, args.val_variations)
-        # else:
-        #     data, edge = all_data[0].cuda(), all_data[1].cuda()
-        #     output, logits, msg_hook = decoder(data)
-        #     control_constraint_loss = torch.zeros(1).cuda()
-
-        data, edge = all_data[0].cuda(), all_data[1].cuda()
-        output, logits, _ = decoder(data)
-        control_constraint_loss = torch.zeros(1).cuda()
+        if args.val_grouped:
+            data, which_node, edge = all_data[0].cuda(
+            ), all_data[1].cuda(), all_data[2].cuda()
+            # import pdb
+            # pdb.set_trace()
+            output, logits, msg_hook = decoder(data)
+            control_constraint_loss = control_loss(
+                msg_hook, which_node, args.input_atoms, args.val_variations)
+        else:
+            data, edge = all_data[0].cuda(), all_data[1].cuda()
+            output, logits, _ = decoder(data)
+            control_constraint_loss = torch.zeros(1).cuda()
 
         prob = my_softmax(logits, -1)
         target = data[:, :, 1:, :]
@@ -71,7 +67,5 @@ def val_control(args, log_prior, logger, save_folder, valid_loader, epoch, decod
 
     print('Val AVG', np.mean(control_val),
           np.mean(kl_val), np.mean(nll_val), np.mean(nll_val_lasttwo))
-    logger.log('val', decoder, epoch, np.mean(nll_val), np.mean(nll_val_lasttwo), scheduler=scheduler, kl_val=np.mean(kl_val), mse_val=np.mean(mse_val), a_val=np.mean(
-        a_val), b_val=np.mean(b_val), c_val=np.mean(c_val), control_constraint_loss_val=np.mean(control_val), nll_lasttwo_5_val=np.mean(nll_val_lasttwo_5), nll_lasttwo_10_val=np.mean(nll_val_lasttwo_10), nll_lasttwo__1_val=np.mean(nll_val_lasttwo__1), nll_lasttwo_1_val=np.mean(nll_val_lasttwo_1))  # msg_hook_weights=np.mean(msg_hook_mean),
 
-    return np.mean(nll_val)
+    return np.mean(nll_val), np.mean(nll_val_lasttwo), np.mean(kl_val), np.mean(mse_val), np.mean(a_val), np.mean(b_val), np.mean(c_val), np.mean(control_val), np.mean(nll_val_lasttwo_5), np.mean(nll_val_lasttwo_10), np.mean(nll_val_lasttwo__1), np.mean(nll_val_lasttwo_1)

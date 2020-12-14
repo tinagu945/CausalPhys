@@ -16,102 +16,30 @@ from RL.train_PPO import train_rl
 # from  import val_control
 # from test import test_control
 from utils.logger import Logger
-from data.AL_sampler import RandomPytorchSampler
+from AL.AL_control_sampler import RandomPytorchSampler
 from data.datasets import *
 from data.dataset_utils import *
-from data.generate_dataset import generate_dataset_discrete
+from data.generate_dataset import generate_dataset_discrete, get_noise_std
 from RL.PPO_discrete import *
 from AL.AL_env import *
 from data.simulator import RolloutSimulator
 from data.scenarios import FrictionSliding
+from RL.general_parser import general_parser
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--seed', type=int, default=42, help='Random seed.')
-parser.add_argument('--epochs', type=int, default=10,
-                    help='Number of epochs to train every time RL adds a new datapoint.')
-parser.add_argument('--rl-epochs', type=int, default=500,
-                    help='Number of epochs to train the rl policy inside each epoch of learning.')
-parser.add_argument('--train-bs', type=int, default=10,
-                    help='Number of samples per batch during training.')
-parser.add_argument('--val-bs', type=int, default=10,
-                    help='Number of samples per batch during validation and test.')
-parser.add_argument('--lr', type=float, default=1e-4,
-                    help='Initial learning rate.')
-parser.add_argument('--decoder-hidden', type=int, default=256,
-                    help='Number of hidden units.')
-parser.add_argument('--temp', type=float, default=0.5,
-                    help='Temperature for Gumbel softmax.')
-parser.add_argument('--input-atoms', type=int, default=6,
-                    help='Number of atoms need to be controlled in simulation.')
-parser.add_argument('--suffix', type=str, default='causal_vel_delta_grouped_46656',
-                    help='Suffix for training data (e.g. "_charged".')
-parser.add_argument('--val-suffix', type=str, default=None,
-                    help='Suffix for valid and testing data (e.g. "_charged".')
-parser.add_argument('--decoder-dropout', type=float, default=0.0,
-                    help='Probability of an element to be zeroed.')
-parser.add_argument('--save-folder', type=str, default='logs_RL',
-                    help='Where to save the trained model and logs.')
-parser.add_argument('--edge-types', type=int, default=2,
-                    help='The number of edge types to infer.')
-parser.add_argument('--dims', type=int, default=9,
-                    help='The number of input dimensions (position + velocity).')
-parser.add_argument('--timesteps', type=int, default=40,
-                    help='The number of time steps per sample.')
-parser.add_argument('--prediction-steps', type=int, default=20, metavar='N',
-                    help='Num steps to predict before re-using teacher forcing.')
-parser.add_argument('--lr-decay', type=int, default=40,
-                    help='After how epochs to decay LR by a factor of gamma.')
-parser.add_argument('--gamma', type=float, default=0.5,
-                    help='LR decay factor.')
-parser.add_argument('--skip-first', action='store_true', default=True,
-                    help='Skip first edge type in decoder, i.e. it represents no-edge.')
-parser.add_argument('--var', type=float, default=5e-5,
-                    help='Output variance.')
-parser.add_argument('--hard', action='store_true', default=False,
-                    help='Uses discrete samples in training forward pass.')
-parser.add_argument('--self-loop', action='store_true', default=True,
-                    help='Whether graph contains self loop.')
-parser.add_argument('--kl', type=float, default=10,
-                    help='Whether to include kl as loss.')
-# parser.add_argument('--variations', type=int, default=6,
-#                     help='#values for one controlled var in training dataset.')
-parser.add_argument('--action_dim', type=int, default=4,
-                    help='Dimension of action.')
-parser.add_argument('--val-variations', type=int, default=4,
-                    help='#values for one controlled var in validation dataset.')
-parser.add_argument('--target-atoms', type=int, default=2,
-                    help='#atoms for results.')
-parser.add_argument('--comment', type=str, default='',
-                    help='Additional info for the run.')
-parser.add_argument('--train-size', type=int, default=None,
-                    help='#datapoints for train')
-parser.add_argument('--val-size', type=int, default=None,
-                    help='#datapoints for val')
-parser.add_argument('--test-size', type=int, default=None,
-                    help='#datapoints for test')
-parser.add_argument('--val-need-grouping', action='store_true', default=False,
-                    help='If grouped is True, whether the validation dataset actually needs grouping.')
-parser.add_argument('--val-grouped', action='store_true', default=True,
-                    help='Whether to group the valid and test dataset')
-parser.add_argument('--control-constraint', type=float, default=0.0,
-                    help='Coefficient for control constraint loss')
-parser.add_argument('--gt-A', action='store_true', default=False,
-                    help='Whether use the ground truth adjacency matrix, useful for debuging the encoder.')
-parser.add_argument('--train-log-freq', type=int, default=10,
-                    help='How many epochs every logging for causal model training.')
-parser.add_argument('--val-log-freq', type=int, default=5,
-                    help='How many epochs every logging for causal model validating.')
-parser.add_argument('--rl-log-freq', type=int, default=5,
+parser = general_parser()
+parser.add_argument('--rl-epochs', type=int, default=10,
+                    help='#epochs for each PPO memory training.')
+parser.add_argument('--patience', type=int, default=5,
+                    help='Number of epochs after which if validation error has not decreased, we stop the training.')
+parser.add_argument('--rl-log-freq', type=int, default=1,
                     help='How many epochs every logging for rl training.')
-parser.add_argument('--all-connect', action='store_true', default=False,
-                    help='Whether the adjancency matrix is fully connected and not trainable.')
-parser.add_argument('--solved-reward', type=float, default=-500,
-                    help='Stop the entire training (end episodes) of PPO if avg_reward > solved_reward')
+# parser.add_argument('--solved-reward', type=float, default=-500,
+#                     help='Stop the entire training (end episodes) of PPO if avg_reward > solved_reward')
 parser.add_argument('--extractors-update-epoch', type=int, default=20,
                     help='How many epochs every gradient descent for feature extractors.')
 parser.add_argument('--rl-update-timestep', type=int, default=10,
                     help='How many epochs every gradient descent for PPO policy.')
-parser.add_argument('--rl-max-timesteps', type=int, default=1000,
+parser.add_argument('--rl-max-timesteps', type=int, default=1010,
                     help='How many times the PPO policy can try for each episode.')
 parser.add_argument('--rl-lr', type=float, default=0.002,
                     help='lr to train the rl policy')
@@ -132,10 +60,11 @@ parser.add_argument('--budget', type=int, default=1000,
                     help='If the causal model queried for more data than budget, env reset.')
 parser.add_argument('--initial-obj-num', type=int, default=216,
                     help='Number of objects available at the beginning.')
-# TODO:
 parser.add_argument('--noise', type=float, default=None,
                     help='The noise the data simulator adds to training data.')
-parser.add_argument('--action_requires_grad', action='store_true', default=False,
+parser.add_argument('--causal-threshold', type=float, default=0,
+                    help='The threshold above which it is possible a causal relation does exist under an intervention.')
+parser.add_argument('--action-requires-grad', action='store_true', default=False,
                     help='Whether the action needs gradient for intervene_graph.')
 parser.add_argument('--intervene', action='store_true', default=False,
                     help='Whether do the intervention when there exists paired data.')
@@ -149,6 +78,11 @@ args.state_dim = 3*args.extract_feat_dim * \
 if args.gt_A or args.all_connect:
     print('Using given graph and kl loss will be omitted')
     args.kl = 0
+if args.noise:
+    if args.causal_threshold == 0:
+        print('You have a noise for rollout now but the noise causal_threshold you specified is 0!')
+else:
+    assert args.causal_threshold == 0
 
 print(args)
 
@@ -160,7 +94,7 @@ torch.cuda.manual_seed(args.seed)
 now = datetime.datetime.now()
 timestamp = now.isoformat()
 save_folder = '{}/exp{}/'.format(args.save_folder,
-                                 '_'.join([timestamp]+[i.replace("--", "") for i in sys.argv[1:]]))
+                                 '_'.join([args.script, timestamp]+[i.replace("--", "") for i in sys.argv[1:]]))
 os.mkdir(save_folder)
 meta_file = open(os.path.join(save_folder, 'meta.txt'), 'w')
 print(args, file=meta_file)
@@ -235,8 +169,15 @@ ppo = PPO(args.state_dim, discrete_mapping, args.rl_hidden, args.rl_lr,
 
 interval = 0.1
 delta = False
+noise_type = 'gaussian'
 scenario = FrictionSliding(args.input_atoms, args.target_atoms,
-                           interval, args.timesteps, delta, args.noise)
+                           interval, args.timesteps, delta, {'type': noise_type, 'value': None})
+no_noise_train = np.load(
+    'data/datasets/feat_train_causal_vel_sliding_spaced_new.npy')
+scenario.add_noise['value'] = get_noise_std(
+    args.input_atoms, no_noise_train, args.noise)
+print('Noise variance', scenario.add_noise['value'])
+
 simulator = RolloutSimulator(scenario)
 learning_assess_values = [[0.5, 0.85], [0.5, 0.8], [
     0.5, 0.2, 0.1], [0.8, 1.1, 0.7], [0.5, 0.8], [0.5, 0.8]]

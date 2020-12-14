@@ -32,8 +32,13 @@ class MLPDecoder_Causal(nn.Module):
                 1, 1, args.num_atoms*(args.num_atoms-1), args.edge_types)
 
         if args.gt_A:
-            edge = np.load(
-                'data/datasets/edges_train_causal_vel_' + args.suffix + '.npy')
+            if args.suffix:
+                edge = np.load(
+                    'data/datasets/edges_train_causal_vel_' + args.suffix + '.npy')
+            else:
+                edge = np.load(
+                    'data/datasets/edges_valid_causal_vel_' + args.val_suffix + '.npy')
+
             self.rel_graph = torch.from_numpy(edge*10).cuda()
             self.requires_grad = False
             print('Using ground truth A and the softmax result is', self.rel_graph)

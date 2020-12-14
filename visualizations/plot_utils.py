@@ -4,7 +4,7 @@ from PIL import Image, ImageFont, ImageDraw
 import matplotlib.pyplot as plt
 import os
 from models.modules_causal_vel import *
-from data.AL_sampler import RandomPytorchSampler
+from AL.AL_control_sampler import RandomPytorchSampler
 from data.datasets import *
 from data.dataset_utils import *
 import argparse
@@ -13,28 +13,28 @@ from utils.functions import *
 
 
 def load_predict(args, weight_path, start_ind=0, stop_ind=5, record=True):
-    weight_path = 'logs/'+weight_path
-    decoder = MLPDecoder_Causal(args).cuda()
+    weight_path = os.path.join(args.save_folder, weight_path)
     off_diag = np.ones([args.num_atoms, args.num_atoms])
     rel_rec = np.array(encode_onehot(np.where(off_diag)[0]), dtype=np.float32)
     rel_send = np.array(encode_onehot(np.where(off_diag)[1]), dtype=np.float32)
     rel_rec = torch.FloatTensor(rel_rec).cuda()
     rel_send = torch.FloatTensor(rel_send).cuda()
+    decoder = MLPDecoder_Causal(args, rel_rec, rel_send).cuda()
 
-    train_data = OneGraphDataset.load_one_graph_data(
-        'train_causal_vel_'+args.suffix, train_data=None, size=None, self_loop=args.self_loop, control=False)
+    train_data_min_max = [[0, 0, 0, 0.53, 0, 0, 0, 0],
+                          [1, 1, 0.56, 1.5, 1, 1, 381.24, 727.27]]
     if args.val_grouped:
         # To see control loss, val and test should be grouped
         valid_data = OneGraphDataset.load_one_graph_data(
-            'valid_causal_vel_'+args.val_suffix, train_data=train_data, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.val_variations, need_grouping=args.val_need_grouping)
+            'valid_causal_vel_'+args.val_suffix, train_data_min_max=train_data_min_max, size=args.val_size, self_loop=args.self_loop, control=True, control_nodes=args.input_atoms, variations=args.val_variations, need_grouping=args.val_need_grouping)
         valid_sampler = RandomPytorchSampler(valid_data)
         valid_data_loader = DataLoader(
             valid_data, batch_size=args.val_bs, shuffle=False, sampler=valid_sampler)
     else:
         valid_data = OneGraphDataset.load_one_graph_data(
-            'valid_causal_vel_'+args.val_suffix, train_data=train_data, size=args.val_size, self_loop=args.self_loop, control=False)
+            'valid_causal_vel_'+args.val_suffix, train_data_min_max=train_data_min_max, size=args.val_size, self_loop=args.self_loop, control=False)
         valid_data_loader = DataLoader(
-            valid_data, batch_size=args.val_bs, shuffle=False)
+            valid_data, batch_size=args.val_bs, shuffle=True)
 
     decoder.load_state_dict(torch.load(weight_path)[0])
     decoder.eval()
@@ -63,19 +63,16 @@ def load_predict(args, weight_path, start_ind=0, stop_ind=5, record=True):
             pass
         if batch_idx < stop_ind and (batch_idx > start_ind or batch_idx == start_ind):
             if args.val_grouped:
-                # edge is only for calculating edge accuracy. Since we have not included that, edge is not used.
                 data, which_node, edge = all_data[0].cuda(
                 ), all_data[1].cuda(), all_data[2].cuda()
-                output, logits, msg_hook = decoder(data, rel_rec, rel_send,
-                                                   args.temp, args.hard, args.prediction_steps, [])
+                output, logits, msg_hook = decoder(data)
                 control_constraint_loss = control_loss(
-                    msg_hook, which_node, args.input_atoms, args.variations)*args.control_constraint
-
+                    msg_hook, which_node, args.input_atoms, args.val_variations)
             else:
                 data, edge = all_data[0].cuda(), all_data[1].cuda()
-                output, logits, msg_hook = decoder(data, rel_rec, rel_send,
-                                                   args.temp, args.hard, args.prediction_steps, [])
+                output, logits, _ = decoder(data)
                 control_constraint_loss = torch.zeros(1).cuda()
+
             # print('batch_size', data.size(0))
             target = data[:, :, 1:, :]
             loss_nll, _ = nll_gaussian(
@@ -84,12 +81,13 @@ def load_predict(args, weight_path, start_ind=0, stop_ind=5, record=True):
 
             if record:
                 print('Nll', loss_nll)
-                target, output = denormalize(target, output, train_data)
+                target, output = denormalize(
+                    target, output, train_data_min_max)
                 print('Setup [shapes,colors,mus,thetas,masses,v0s]',
                       batch_idx, target[0, :-2, 0, 0])
-                print('Velocity', batch_idx,
+                print('Velocity GT and pred', batch_idx,
                       target[0, -2, :, 0], '\n', output[0, -2, :, 0])
-                print('Position', batch_idx,
+                print('Position GT and pred', batch_idx,
                       target[0, -1, :, 0], '\n', output[0, -1, :, 0])
                 condition.append(target[:, :-2, 0, 0])
                 truth.append(target)
@@ -101,12 +99,12 @@ def load_predict(args, weight_path, start_ind=0, stop_ind=5, record=True):
     return loss, truth, pred, condition, valid_data
 
 
-def denormalize(target, output, train_data):
+def denormalize(target, output, train_data_min_max):
     for i in range(target.size(1)):
         output[:, i, :, 0] = (
-            (output[:, i, :, 0]+1)*(train_data.maxs[i]-train_data.mins[i]))/2+train_data.mins[i]
+            (output[:, i, :, 0]+1)*(train_data_min_max[1][i]-train_data_min_max[0][i]))/2+train_data_min_max[0][i]
         target[:, i, :, 0] = (
-            (target[:, i, :, 0]+1)*(train_data.maxs[i]-train_data.mins[i]))/2+train_data.mins[i]
+            (target[:, i, :, 0]+1)*(train_data_min_max[1][i]-train_data_min_max[0][i]))/2+train_data_min_max[0][i]
     return target, output
 
 

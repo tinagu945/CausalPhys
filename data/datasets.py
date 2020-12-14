@@ -23,7 +23,10 @@ class OneGraphDataset(Dataset):
         # print('loading', suffix)
         feat = np.load('data/datasets/feat_'+suffix + '.npy')
         if size:
-            feat = feat[:int(size)]
+            indices = np.arange(feat.shape[0])
+            np.random.shuffle(indices)
+            print('Dataset not controlled and has been shuffled', indices[:10])
+            feat = feat[indices[:int(size)]]
         edge = np.load('data/datasets/edges_' + suffix + '.npy')[0]
 
         mins, maxs = [], []
@@ -210,10 +213,11 @@ class RLDataset(Dataset):
         self.maxs = maxs
 
         # Normalize the first dimension of feature to [-1, 1]
-        self.num_atoms = data.size(1)
-        for i in range(self.num_atoms):
-            self.data[:, i, :, 0] = (
-                self.data[:, i, :, 0] - self.mins[i])*2/(self.maxs[i]-self.mins[i])-1
+        self.num_atoms = len(self.mins)
+        if len(self.data.size()) == 4:
+            for i in range(self.num_atoms):
+                self.data[:, i, :, 0] = (
+                    self.data[:, i, :, 0] - self.mins[i])*2/(self.maxs[i]-self.mins[i])-1
 
     def __len__(self):
         return self.data.size(0)
