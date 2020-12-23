@@ -83,31 +83,20 @@ class AL_env(object):
 
         if self.discrete_mapping:
             # then the queries except the last propensity score are not actual values but index.
-            query_setting = []
-            query_setting_grad = []
-            for i in range(1, len(self.discrete_mapping)):
-                # print(i, len(action), action[i],
-                #       len(self.discrete_mapping[i]))
-
-                query_setting.append(
-                    self.discrete_mapping[i][int(action[i])])
-            #     if action_grad is not None:
-            #         query_setting_grad.append(
-            #             (torch.Tensor(self.discrete_mapping_grad[i]).cuda()*action_grad[i]).sum())
-
-            # if idx_grad is not None:
-            #     idx_setting_grad = torch.matmul(idx_grad, torch.Tensor(
-            #         list(self.obj.values())).cuda())
-            #     query_setting_grad = torch.cat([
-            #         idx_setting_grad, torch.stack(query_setting_grad)])
+            setting_value = []
+            setting_value_grad = []
+            for i in range(len(self.discrete_mapping)):
+                try:
+                    setting_value.extend(
+                        self.discrete_mapping[i][int(action[i])])
+                except:
+                    setting_value.append(
+                        self.discrete_mapping[i][int(action[i])])
 
         else:
-            query_setting = list(query)
+            setting_value = list(query)
 
         # Assume the cluster of expensive, obj-related variables are before the cluster of cheap, RL-chosen variables.
-        idx = int(action[0])
-        setting_value = self.discrete_mapping[0][idx]+query_setting
-
         if self.args.noise:
             _, trajectory = generate_dataset_discrete(
                 [setting_value], self.simulator.scenario, False)
@@ -116,7 +105,7 @@ class AL_env(object):
                 [setting_value], self.simulator.scenario, False)
 
         trajectory = torch.Tensor(trajectory)
-        return idx, trajectory, setting_value, query_setting_grad
+        return trajectory, setting_value, None
 
     def process_new_data(self, action, new_datapoint, intervene):
         """Do intervention on the rel_graph while check repeatance of the action

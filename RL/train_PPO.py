@@ -17,7 +17,7 @@ def train_rl(env, memory, ppo):
         episode_penalty = 0
         for t in range(env.args.rl_max_timesteps):
             timestep += 1
-            complete_action_grad, complete_action = ppo.policy_old.act(
+            complete_action = ppo.policy_old.act(
                 memory, state)
 
             # TODO: get requires_grad working with 1 level of action.
@@ -35,12 +35,12 @@ def train_rl(env, memory, ppo):
                 state, reward, done = env.step(
                     idx, query_setting_grad, new_datapoint)
             else:
-                idx, new_datapoint, query_setting, _ = env.action_to_new_data(
+                new_datapoint, query_setting, _ = env.action_to_new_data(
                     complete_action)
                 repeat = env.process_new_data(
                     complete_action, new_datapoint, env.args.intervene)
                 val_loss = env.train_causal(
-                    idx, query_setting, new_datapoint)
+                    int(complete_action[0]), query_setting, new_datapoint)
                 state, reward, done = env.step(val_loss)
                 print('repeat', repeat, 'intervened nodes', env.intervened_nodes, 'val_loss', val_loss,
                       'self.train_dataset.data.size(0)', env.train_dataset.data.size(0))

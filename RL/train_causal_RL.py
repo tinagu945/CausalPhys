@@ -27,7 +27,7 @@ from data.scenarios import FrictionSliding
 from RL.general_parser import general_parser
 
 parser = general_parser()
-parser.add_argument('--rl-epochs', type=int, default=10,
+parser.add_argument('--rl-epochs', type=int, default=1000,
                     help='#epochs for each PPO memory training.')
 parser.add_argument('--patience', type=int, default=5,
                     help='Number of epochs after which if validation error has not decreased, we stop the training.')
@@ -37,7 +37,7 @@ parser.add_argument('--rl-log-freq', type=int, default=1,
 #                     help='Stop the entire training (end episodes) of PPO if avg_reward > solved_reward')
 parser.add_argument('--extractors-update-epoch', type=int, default=20,
                     help='How many epochs every gradient descent for feature extractors.')
-parser.add_argument('--rl-update-timestep', type=int, default=10,
+parser.add_argument('--rl-update-timestep', type=int, default=20,
                     help='How many epochs every gradient descent for PPO policy.')
 parser.add_argument('--rl-max-timesteps', type=int, default=1010,
                     help='How many times the PPO policy can try for each episode.')
@@ -73,8 +73,6 @@ args = parser.parse_args()
 assert args.train_bs == args.val_bs
 args.num_atoms = args.input_atoms+args.target_atoms
 args.script = 'RL_PPO'
-args.state_dim = 3*args.extract_feat_dim * \
-    args.initial_obj_num+2*args.extract_feat_dim
 if args.gt_A or args.all_connect:
     print('Using given graph and kl loss will be omitted')
     args.kl = 0
@@ -161,11 +159,12 @@ discrete_mapping = [all_obj, [0.53, 1.5, 1.2844444444444445, 1.1766666666666667,
 # discrete_mapping = [all_obj, [0.53, 0.637], [0, 0.11], [0, 0.11]]
 discrete_mapping_grad = [lambda x: 0.53+x *
                          (1.5-0.53)/5, lambda x: 0+x*(1-0)/5, lambda x: 0+x*(1-0)/5]
-assert args.action_dim == len(discrete_mapping)
+assert args.action_dim == len(discrete_mapping)-1
+# action_dim: exclude objects
+# discrete mapping: include objects
 
 memory = Memory()
-ppo = PPO(args.state_dim, discrete_mapping, args.rl_hidden, args.rl_lr,
-          betas, args.rl_gamma, args.rl_epochs, eps_clip, args.action_dim)
+ppo = PPO(args, discrete_mapping, betas, eps_clip)
 
 interval = 0.1
 delta = False

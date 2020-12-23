@@ -25,34 +25,34 @@ class Memory:
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, state_dim, action_values, n_latent_var, action_num):
-        # action_num: number of action types, each has dimension=action_dim. +1 because of propensity score.
+    def __init__(self, args, action_values):
         super(ActorCritic, self).__init__()
+        self.args = args
         # actor
         self.action_feature = nn.Sequential(
-            nn.Linear(state_dim, n_latent_var),
+            nn.Linear(5*args.extract_feat_dim, self.args.rl_hidden),
             nn.Tanh(),
-            nn.Linear(n_latent_var, n_latent_var),
+            nn.Linear(self.args.rl_hidden, self.args.rl_hidden),
             nn.Tanh()
         ).cuda()
 
-        self.action_num = action_num
         # Since each action type is deciding by its own player, assuming indepence. TODO: fix an order and make it bayesian.
-        self.action_player = []
-        for i in range(self.action_num):
+        # For propensity score
+        self.action_player = [nn.Linear(self.args.rl_hidden, 1).cuda()]
+        for i in range(self.args.action_dim):
             # maybe more layers
             self.action_player.append(
-                nn.Linear(n_latent_var, len(action_values[i])).cuda())
-        self.action_player.append(nn.Linear(n_latent_var, 1).cuda())
-        self.softmax = nn.Softmax(dim=-1).cuda()
+                nn.Linear(self.args.rl_hidden, len(action_values[i+1])).cuda())
+        self.softmax = nn.Softmax(dim=0).cuda()
 
         # critic
         self.value_player = nn.Sequential(
-            nn.Linear(state_dim, n_latent_var),
+            nn.Linear(3*self.args.extract_feat_dim *
+                      self.args.initial_obj_num+2*self.args.extract_feat_dim, self.args.rl_hidden),
             nn.Tanh(),
-            nn.Linear(n_latent_var, n_latent_var),
+            nn.Linear(self.args.rl_hidden, self.args.rl_hidden),
             nn.Tanh(),
-            nn.Linear(n_latent_var, 1)
+            nn.Linear(self.args.rl_hidden, 1)
         ).cuda()
 
     def forward(self):
@@ -60,67 +60,97 @@ class ActorCritic(nn.Module):
 
     def act(self, memory, state):
         """
-        Return the choice for the ith action type
+        Object-wise setting, then select one setting by argmax
+        state: [set_learning_assess_feat, obj_data_features]. obj_data_features contains first obj feature then obj data feature.
         """
-        # state = torch.from_numpy(state).float().to(device)
-        complete_action = []
-        complete_action_grad = []
+        state = state.squeeze()
+        set_learning_assess_feat = state[:2*self.args.extract_feat_dim]
+        obj_data_features = state[2 *
+                                  self.args.extract_feat_dim:].view(-1, 3*self.args.extract_feat_dim)
+        num_obj = obj_data_features.size(0)
 
-        action_logprobs = 0
-        state_feat = self.action_feature(state)
-        for i in range(self.action_num):
-            action_probs = self.softmax(self.action_player[i](state_feat))
+        all_state = torch.cat([
+            set_learning_assess_feat.expand(num_obj, -1), obj_data_features], dim=-1)
+
+        all_state_feat = self.action_feature(all_state)
+        # find the most_wanted setting by last dimension.
+        propensity = self.softmax(self.action_player[0](all_state_feat))[:, 0]
+        dist = Categorical(propensity)
+        most_wanted = dist.sample()
+        most_wanted_idx = most_wanted.item()
+        # The others do not matter anymore so not updating their log probs.
+        action_logprob = dist.log_prob(most_wanted)
+        dist_entropy = dist.entropy()
+        complete_action = [most_wanted_idx]
+
+        for an in range(1, self.args.action_dim+1):
+            action_probs = self.softmax(
+                self.action_player[an](all_state_feat[most_wanted_idx]))
             dist = Categorical(action_probs)
             action = dist.sample()
-            action_logprobs += dist.log_prob(action)
             complete_action.append(action.item())
-            # Use gumbel softmax to replace categorical sampling.
-            # action_onehot, action_probs = gumbel_softmax(
-            #     self.action_player[i](state_feat), hard=True)
-            # action_logprobs += torch.log((action_probs*action_onehot).sum())
-            # action = action_onehot[0]
-            # complete_action.append(action.argmax().item())
-            complete_action_grad.append(action)
+            action_logprob += dist.log_prob(action)
+            dist_entropy += dist.entropy()
 
         memory.states.append(state)
         memory.actions.append(torch.Tensor(complete_action))
-        memory.logprobs.append(torch.Tensor([action_logprobs]))
-        return complete_action_grad, complete_action
+        memory.logprobs.append(action_logprob)
+        return complete_action
 
-    def evaluate(self, state, action):
+    def evaluate(self, states, actions):
         """
         Evaluate the choice for the ith action type
         """
-        action_logprobs = 0
-        dist_entropy = 0
+        num_data = states.size(0)
+        action_logprobs, state_values, dist_entropys = torch.zeros((num_data)).cuda(
+        ), torch.zeros((num_data)).cuda(), torch.zeros((num_data)).cuda(),
+        for i in range(num_data):
+            state = states[i]
+            action = actions[i]
+            set_learning_assess_feat = state[:2*self.args.extract_feat_dim]
+            obj_data_features = state[2 *
+                                      self.args.extract_feat_dim:].view(-1, 3*self.args.extract_feat_dim)
+            num_obj = obj_data_features.size(0)
 
-        state_feat = self.action_feature(state)
-        for i in range(self.action_num):
-            action_probs = self.action_player[i](state_feat)
-            # TODO: change to gumbel softmax
-            dist = Categorical(action_probs)
-            action_logprobs += dist.log_prob(action[:, i])
-            dist_entropy += dist.entropy()
-        # action_logprobs and dist_entropy size: (batch_size)
-        # state_value size: (batch_size, 1)
-        state_value = self.value_player(state)
-        return action_logprobs, torch.squeeze(state_value), dist_entropy
+            all_state = torch.cat([
+                set_learning_assess_feat.expand(num_obj, -1), obj_data_features], dim=-1)
+
+            all_state_feat = self.action_feature(all_state)
+            # find the most_wanted setting by last dimension.
+            propensity = self.softmax(
+                self.action_player[0](all_state_feat))[:, 0]
+            dist = Categorical(propensity)
+            action_logprob = dist.log_prob(action[0])
+            dist_entropy = dist.entropy()
+
+            for an in range(1, self.args.action_dim+1):
+                action_probs = self.softmax(
+                    self.action_player[an](all_state_feat[int(action[0])]))
+                dist = Categorical(action_probs)
+                action_logprob += dist.log_prob(action[an])
+                dist_entropy += dist.entropy()
+
+            # action_logprobs and dist_entropy size: (batch_size)
+            # state_value size: (batch_size, 1)
+            state_value = self.value_player(state)
+
+            action_logprobs[i] = action_logprob
+            state_values[i] = state_value
+            dist_entropys[i] = dist_entropy
+
+        return action_logprobs, state_values, dist_entropys
 
 
 class PPO:
-    def __init__(self, state_dim, action_dim, n_latent_var, lr, betas, gamma, K_epochs, eps_clip, action_num):
-        self.lr = lr
-        self.betas = betas
-        self.gamma = gamma
+    def __init__(self, args, discrete_mapping, betas, eps_clip):
+        self.gamma = args.gamma
         self.eps_clip = eps_clip
-        self.K_epochs = K_epochs
+        self.K_epochs = args.rl_epochs
 
-        self.policy = ActorCritic(
-            state_dim, action_dim, n_latent_var, action_num).to(device)
+        self.policy = ActorCritic(args, discrete_mapping).to(device)
         self.optimizer = torch.optim.Adam(
-            self.policy.parameters(), lr=lr, betas=betas)
-        self.policy_old = ActorCritic(
-            state_dim, action_dim, n_latent_var, action_num).to(device)
+            self.policy.parameters(), lr=args.rl_lr, betas=betas)
+        self.policy_old = ActorCritic(args, discrete_mapping).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
 
         self.MseLoss = nn.MSELoss()
@@ -138,17 +168,17 @@ class PPO:
 
         # Normalizing the rewards:
         rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-5)
+        # was 1e-5
+        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-3)
 
         # convert list to tensor
-        # import pdb
-        # pdb.set_trace()
         old_states = torch.stack(memory.states).to(device).detach()
         old_actions = torch.stack(memory.actions).to(device).detach()
         old_logprobs = torch.stack(memory.logprobs).to(device).detach()
 
         # Optimize policy for K epochs:
         for i in range(self.K_epochs):
+            # print(i)
             # Evaluating old actions and values :
             logprobs, state_values, dist_entropy = self.policy.evaluate(
                 old_states, old_actions)
@@ -163,6 +193,7 @@ class PPO:
                                 1+self.eps_clip) * advantages
             loss = -torch.min(surr1, surr2) + 0.5 * \
                 self.MseLoss(state_values, rewards) - 0.01*dist_entropy
+            # print(surr1, surr2, state_values, rewards, dist_entropy)
 
             # take gradient step
             self.optimizer.zero_grad()

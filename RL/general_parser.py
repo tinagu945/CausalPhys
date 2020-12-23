@@ -50,8 +50,8 @@ def general_parser():
                         help='Whether graph contains self loop.')
     parser.add_argument('--kl', type=float, default=10,
                         help='Whether to include kl as loss.')
-    parser.add_argument('--action_dim', type=int, default=4,
-                        help='Dimension of action.')
+    parser.add_argument('--action-dim', type=int, default=3,
+                        help='Dimension of action for each object.')
 
     parser.add_argument('--val-variations', type=int, default=4,
                         help='#values for one controlled var in validation dataset.')
