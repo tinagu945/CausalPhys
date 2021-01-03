@@ -83,7 +83,8 @@ parser.add_argument('--variations', type=int, default=5,
                     help='#values for one controlled var.')
 parser.add_argument('--comment', type=str, default='',
                     help='Additional info for the run.')
-parser.add_argument('--dataset_size', nargs='+', help='#datapoints for train, val and test', required=True)
+parser.add_argument('--dataset_size', nargs='+',
+                    help='#datapoints for train, val and test', required=True)
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -119,10 +120,10 @@ else:
     print("WARNING: No save_folder provided!" +
           "Testing (within this script) will throw an error.")
 
-train_loader, valid_loader, test_loader = load_my_data(batch_size=args.batch_size, total_size=args.dataset_size,\
-                                                       suffix=args.suffix, self_loop=args.self_loop, \
-                                                       variations=args.variations, control_nodes=6, control=True,\
-                                                      control_batch_size = args.control_batch_size)
+train_loader, valid_loader, test_loader = load_my_data(batch_size=args.batch_size, total_size=args.dataset_size,
+                                                       suffix=args.suffix, self_loop=args.self_loop,
+                                                       variations=args.variations, control_nodes=6, control=True,
+                                                       control_batch_size=args.control_batch_size)
 
 print(args, file=log)
 log.flush()
@@ -131,7 +132,8 @@ if args.self_loop:
     # Assuming there is self loops
     off_diag = np.ones([args.num_atoms, args.num_atoms])
 else:
-    off_diag = np.ones([args.num_atoms, args.num_atoms]) - np.eye(args.num_atoms)
+    off_diag = np.ones([args.num_atoms, args.num_atoms]) - \
+        np.eye(args.num_atoms)
 
 # This is not adjacency matrix since it's 49*7, not 7*7!
 rel_rec = np.array(encode_onehot(np.where(off_diag)[0]), dtype=np.float32)
@@ -148,7 +150,8 @@ elif args.decoder == 'rnn':
                          do_prob=args.decoder_dropout,
                          skip_first=args.skip_first)
 elif args.decoder == 'sim':
-    decoder = SimulationDecoder(loc_max, loc_min, vel_max, vel_min, args.suffix)
+    decoder = SimulationDecoder(
+        loc_max, loc_min, vel_max, vel_min, args.suffix)
 
 if args.load_folder:
     encoder_file = os.path.join(args.load_folder, 'encoder.pt')
@@ -197,17 +200,17 @@ def train(epoch, best_val_loss):
     acc_train = []
     kl_train = []
     mse_train = []
-    
-    rel_graphs=[]
-    rel_graphs_grad=[]
-    
+
+    rel_graphs = []
+    rel_graphs_grad = []
+
     decoder.train()
     for batch_idx, (data, relations, which_node) in enumerate(train_loader):
         if args.cuda:
             data, relations = data.cuda(), relations.cuda()
             which_node = which_node.cuda()[0]
 #         logits = encoder(data, rel_rec, rel_send)
-#         edges = gumbel_softmax(logits, tau=args.temp, hard=args.hard)     
+#         edges = gumbel_softmax(logits, tau=args.temp, hard=args.hard)
 
         if args.decoder == 'rnn':
             output = decoder(data, edges, rel_rec, rel_send, 100,
@@ -215,86 +218,92 @@ def train(epoch, best_val_loss):
                              burn_in_steps=args.timesteps - args.prediction_steps)
         else:
             output, logits = decoder(data, rel_rec, rel_send,
-                             args.temp, args.hard, args.prediction_steps)
+                                     args.temp, args.hard, args.prediction_steps)
         prob = my_softmax(logits, -1)
 
-        #data: bs, #node, #timesteps, dim
-        target = data[:, :, 1:, :] 
+        # data: bs, #node, #timesteps, dim
+        target = data[:, :, 1:, :]
         loss_nll = nll_gaussian(output, target, args.var)
 
-        if args.prior:        
-            loss_kl = kl_categorical(prob, log_prior, args.num_atoms)
-        else:
-            loss_kl = kl_categorical_uniform(prob, args.num_atoms,
-                                             args.edge_types)
-        loss_kl *= args.kl
-        loss = loss_nll +loss_kl
-        if batch_idx <5:
-            a= nll_gaussian(output[:,-1,:,:], target[:,-1,:,:], args.var)
-            b= nll_gaussian(output[:,-2,:,:], target[:,-2,:,:], args.var)
-            c= nll_gaussian(output[:,-3,:,:], target[:,-3,:,:], args.var)
-            print(loss_nll, loss_kl,a,b,c)
-        acc = edge_accuracy(logits, relations)
-        acc_train.append(acc)
-
-        optimizer.zero_grad()
-        loss.backward()    
-        
-        mask = torch.zeros(decoder.rel_graph.size(), requires_grad=False, device="cuda")
-        mask[:,:,(5-which_node):args.num_atoms**2:args.num_atoms]=1
-        mask[:,:,6:args.num_atoms**2:args.num_atoms]=1
-        mask[:,:,7:args.num_atoms**2:args.num_atoms]=1
-        decoder.rel_graph.grad *= mask
-   
-        optimizer.step()    
-        mse_train.append(F.mse_loss(output, target).item())
-        nll_train.append(loss_nll.item())
-        kl_train.append(loss_kl.item())
-        
-        rel_graphs.append(decoder.rel_graph.detach().cpu().numpy())
-        rel_graphs_grad.append(decoder.rel_graph.grad.detach().cpu().numpy())
-
-#     
-    print(epoch, decoder.rel_graph.softmax(-1), decoder.rel_graph.size()) 
-    if epoch % 10==0:
-        torch.save(decoder.state_dict(), os.path.join(save_folder, str(epoch)+'_decoder.pt'))
-        np.save(os.path.join(save_folder, str(epoch)+'_rel_graph.npy'), np.array(rel_graphs))
-        np.save(os.path.join(save_folder, str(epoch)+'_rel_graph_grad.npy'), np.array(rel_graphs_grad))
-
-    nll_val = []
-    acc_val = []
-    kl_val = []
-    mse_val = []
-    a_val =[]
-    b_val=[]
-    c_val=[]
-
-    decoder.eval()
-    for batch_idx, (data, relations) in enumerate(valid_loader):
-        if args.cuda:
-            data, relations = data.cuda(), relations.cuda()
-            
-#         logits = encoder(data, rel_rec, rel_send)
-#         edges = gumbel_softmax(logits, tau=args.temp, hard=True)
-#         
-
-        # validation output uses teacher forcing
-        output, logits = decoder(data, rel_rec, rel_send,
-                             args.temp, args.hard, 1)
-        prob = my_softmax(logits, -1)
-
-        target = data[:, :, 1:, :] 
-        loss_nll = nll_gaussian(output, target, args.var)
-        a= nll_gaussian(output[:,-1,:,:], target[:,-1,:,:], args.var)
-        b= nll_gaussian(output[:,-2,:,:], target[:,-2,:,:], args.var)
-        c= nll_gaussian(output[:,-3,:,:], target[:,-3,:,:], args.var)
-            
         if args.prior:
             loss_kl = kl_categorical(prob, log_prior, args.num_atoms)
         else:
             loss_kl = kl_categorical_uniform(prob, args.num_atoms,
                                              args.edge_types)
-#         loss_kl = kl_categorical_uniform(prob, args.num_atoms, args.edge_types, add_const=True)   
+        loss_kl *= args.kl
+        loss = loss_nll + loss_kl
+        if batch_idx < 5:
+            a = nll_gaussian(output[:, -1, :, :],
+                             target[:, -1, :, :], args.var)
+            b = nll_gaussian(output[:, -2, :, :],
+                             target[:, -2, :, :], args.var)
+            c = nll_gaussian(output[:, -3, :, :],
+                             target[:, -3, :, :], args.var)
+            print(loss_nll, loss_kl, a, b, c)
+        acc = edge_accuracy(logits, relations)
+        acc_train.append(acc)
+
+        optimizer.zero_grad()
+        loss.backward()
+
+        mask = torch.zeros(decoder.rel_graph.size(),
+                           requires_grad=False, device="cuda")
+        mask[:, :, (5-which_node):args.num_atoms**2:args.num_atoms] = 1
+        mask[:, :, 6:args.num_atoms**2:args.num_atoms] = 1
+        mask[:, :, 7:args.num_atoms**2:args.num_atoms] = 1
+        decoder.rel_graph.grad *= mask
+
+        optimizer.step()
+        mse_train.append(F.mse_loss(output, target).item())
+        nll_train.append(loss_nll.item())
+        kl_train.append(loss_kl.item())
+
+        rel_graphs.append(decoder.rel_graph.detach().cpu().numpy())
+        rel_graphs_grad.append(decoder.rel_graph.grad.detach().cpu().numpy())
+
+    print(epoch, decoder.rel_graph.softmax(-1), decoder.rel_graph.size())
+    if epoch % 10 == 0:
+        torch.save(decoder.state_dict(), os.path.join(
+            save_folder, str(epoch)+'_decoder.pt'))
+        np.save(os.path.join(save_folder, str(epoch) +
+                             '_rel_graph.npy'), np.array(rel_graphs))
+        np.save(os.path.join(save_folder, str(epoch) +
+                             '_rel_graph_grad.npy'), np.array(rel_graphs_grad))
+
+    nll_val = []
+    acc_val = []
+    kl_val = []
+    mse_val = []
+    a_val = []
+    b_val = []
+    c_val = []
+
+    decoder.eval()
+    for batch_idx, (data, relations) in enumerate(valid_loader):
+        if args.cuda:
+            data, relations = data.cuda(), relations.cuda()
+
+#         logits = encoder(data, rel_rec, rel_send)
+#         edges = gumbel_softmax(logits, tau=args.temp, hard=True)
+#
+
+        # validation output uses teacher forcing
+        output, logits = decoder(data, rel_rec, rel_send,
+                                 args.temp, args.hard, 1)
+        prob = my_softmax(logits, -1)
+
+        target = data[:, :, 1:, :]
+        loss_nll = nll_gaussian(output, target, args.var)
+        a = nll_gaussian(output[:, -1, :, :], target[:, -1, :, :], args.var)
+        b = nll_gaussian(output[:, -2, :, :], target[:, -2, :, :], args.var)
+        c = nll_gaussian(output[:, -3, :, :], target[:, -3, :, :], args.var)
+
+        if args.prior:
+            loss_kl = kl_categorical(prob, log_prior, args.num_atoms)
+        else:
+            loss_kl = kl_categorical_uniform(prob, args.num_atoms,
+                                             args.edge_types)
+#         loss_kl = kl_categorical_uniform(prob, args.num_atoms, args.edge_types, add_const=True)
 #         acc = edge_accuracy(decoder.rel_graph.squeeze(), relations[0,-7:].unsqueeze(-1))
         acc = edge_accuracy(logits, relations)
         acc_val.append(acc)
@@ -305,7 +314,7 @@ def train(epoch, best_val_loss):
         a_val.append(a.item())
         b_val.append(b.item())
         c_val.append(c.item())
-        
+
 #     import pdb;pdb.set_trace()
 #     print('Epoch: {:04d}'.format(epoch),
 #           'nll_train: {:.10f}'.format(np.mean(nll_train)),
@@ -319,24 +328,21 @@ def train(epoch, best_val_loss):
 #           'kl_val: {:.10f}'.format(np.mean(kl_val)),
 #           'mse_val: {:.10f}'.format(np.mean(mse_val)),
 #           'acc_val: {:.10f}'.format(np.mean(acc_val)),
-#           'time: {:.4f}s'.format(time.time() - t), 
+#           'time: {:.4f}s'.format(time.time() - t),
 #           'lr: {:.6f}'.format(scheduler.get_lr()[0]), file=log)
-    args.val_writer.add_scalar('nll_train',np.mean(nll_train), global_epoch) 
-    args.val_writer.add_scalar('kl_train',np.mean(kl_train), global_epoch) 
-    args.val_writer.add_scalar('mse_train',np.mean(mse_train), global_epoch) 
-    args.val_writer.add_scalar('acc_train',np.mean(acc_train), global_epoch) 
-    args.val_writer.add_scalar('nll_val',np.mean(nll_val), global_epoch) 
-    args.val_writer.add_scalar('-1_val',np.mean(a_val), global_epoch)
-    args.val_writer.add_scalar('-2_val',np.mean(b_val), global_epoch)
-    args.val_writer.add_scalar('-3_val',np.mean(c_val), global_epoch)
-    args.val_writer.add_scalar('kl_val',np.mean(kl_val), global_epoch) 
-    args.val_writer.add_scalar('mse_val',np.mean(mse_val), global_epoch) 
-    args.val_writer.add_scalar('acc_val',np.mean(acc_val), global_epoch) 
-    args.val_writer.add_scalar('lr',scheduler.get_lr()[0], global_epoch) 
-    
-    
-    
-    
+    args.val_writer.add_scalar('nll_train', np.mean(nll_train), global_epoch)
+    args.val_writer.add_scalar('kl_train', np.mean(kl_train), global_epoch)
+    args.val_writer.add_scalar('mse_train', np.mean(mse_train), global_epoch)
+    args.val_writer.add_scalar('acc_train', np.mean(acc_train), global_epoch)
+    args.val_writer.add_scalar('nll_val', np.mean(nll_val), global_epoch)
+    args.val_writer.add_scalar('-1_val', np.mean(a_val), global_epoch)
+    args.val_writer.add_scalar('-2_val', np.mean(b_val), global_epoch)
+    args.val_writer.add_scalar('-3_val', np.mean(c_val), global_epoch)
+    args.val_writer.add_scalar('kl_val', np.mean(kl_val), global_epoch)
+    args.val_writer.add_scalar('mse_val', np.mean(mse_val), global_epoch)
+    args.val_writer.add_scalar('acc_val', np.mean(acc_val), global_epoch)
+    args.val_writer.add_scalar('lr', scheduler.get_lr()[0], global_epoch)
+
     if args.save_folder and np.mean(nll_val) < best_val_loss:
         torch.save([decoder.state_dict(), decoder.rel_graph], decoder_file)
         print('Best model so far, saving...', file=log)
@@ -380,7 +386,7 @@ def test():
 #         edges = gumbel_softmax(logits, tau=args.temp, hard=True)
 
         output, logits = decoder(data, rel_rec, rel_send,
-                             args.temp, args.hard, 1)
+                                 args.temp, args.hard, 1)
         prob = my_softmax(logits, -1)
 
         target = data_decoder[:, :, 1:, :]
@@ -408,8 +414,9 @@ def test():
             target = data[:, :, -args.timesteps:, :]
         else:
             data_plot = data[:, :, args.timesteps:args.timesteps + 21,
-                        :].contiguous()
-            output = decoder(data_plot, rel_rec, rel_send, args.temp, args.hard, 20)
+                             :].contiguous()
+            output = decoder(data_plot, rel_rec, rel_send,
+                             args.temp, args.hard, 20)
             target = data_plot[:, :, 1:, :]
 
         mse = ((target - output) ** 2).mean(dim=0).mean(dim=0).mean(dim=-1)
@@ -449,7 +456,7 @@ t_total = time.time()
 best_val_loss = np.inf
 best_epoch = 0
 global global_epoch
-global_epoch=0
+global_epoch = 0
 
 
 for epoch in range(args.epochs):
@@ -458,7 +465,7 @@ for epoch in range(args.epochs):
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         best_epoch = epoch
-    global_epoch +=1
+    global_epoch += 1
 print("Optimization Finished!")
 print("Best Epoch: {:04d}".format(best_epoch))
 if args.save_folder:

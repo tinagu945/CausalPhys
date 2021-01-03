@@ -25,7 +25,7 @@ import gc
 import GPUtil
 
 
-class AL_env(object):
+class AL_env_entropy(object):
     """
     Wrap the training and testing of the causal network into an env for RL.
     """
@@ -136,6 +136,7 @@ class AL_env(object):
             new_datapoint ([type]): [description] rollout of the action, no gradient.
         """
         repeat = 0
+        num_intervention=0
         # new datapoint: (1, #num nodes, #steps, #dim)
         if torch.is_tensor(action) and action.requires_grad:
             m = nn.ConstantPad1d((0, 2), 0)
@@ -173,6 +174,7 @@ class AL_env(object):
                                       > threshold[:, 0]).sum()
                         if intervene and no_overlap == 1:
                             self.total_intervention += 1
+                            num_intervention += 1
                             # found a single perfect intervention.
                             a = torch.abs(new_setting-setting)
                             b = torch.abs(
@@ -210,7 +212,7 @@ class AL_env(object):
                             #                             0] -= relations*5
                             # self.causal_model.rel_graph[0, 0, :,
                             # 1] += relations*5
-        return repeat
+        return repeat, num_intervention
 
     def train_causal(self, idx, action, new_datapoint):
         """[summary]
@@ -260,17 +262,25 @@ class AL_env(object):
 
         self.epoch += 1
         return nll_val
-
-    def step(self, val_loss):
+    
+    def step_entropy(self, num_intervention):
         state = self.extract_features()
         # Not punishing repetitions, only log it.
-        penalty = float(val_loss) + 100
-        print('100')
+#         import pdb;pdb.set_trace()
+#         penalty = Categorical(
+#             logits=self.causal_model.rel_graph).entropy().sum() + 1
+#         reward =10*self.total_intervention-1
+        reward = num_intervention
         #self.train_dataset.data.size(0) + 100*repeat
         # used up budget or succeed before it
-        done = (val_loss < self.args.budget) or (
-            self.train_dataset.data.size(0) > 150)
-        return state, -penalty, done
+#         done = (penalty < self.args.budget) or (
+#             self.train_dataset.data.size(0) > 150)
+#         done = (reward > self.args.budget) or (
+#             self.train_dataset.data.size(0) > 150)
+        done = (self.train_dataset.data.size(0) > 150)
+
+        return state, reward, done
+    
 
     def extract_features(self):
         # batch_size, num_nodes, step, dim
@@ -351,41 +361,41 @@ class AL_env(object):
         self.scheduler = lr_scheduler.StepLR(self.causal_model_optimizer, step_size=self.args.lr_decay,
                                              gamma=self.args.gamma)
 
-        self.init_train_data()
-        load_weights='100_warmup_weights.pt'
-        if load_weights not in os.listdir(self.args.save_folder):
-            print('no pretrained warm up weights, so training one now.')
-            train_data_loader = DataLoader(
-                self.train_dataset, batch_size=self.args.train_bs, shuffle=False)
+#         self.init_train_data()
+#         load_weights='100_warmup_weights.pt'
+#         if load_weights not in os.listdir(self.args.save_folder):
+#             print('no pretrained warm up weights, so training one now.')
+#             train_data_loader = DataLoader(
+#                 self.train_dataset, batch_size=self.args.train_bs, shuffle=False)
 
-            lowest_loss=np.inf
-            for i in range(1000):
-                print(str(i), 'of warm up training', self.args.save_folder, lowest_loss)
-                nll, nll_lasttwo, kl, mse, control_constraint_loss, lr, rel_graphs, rel_graphs_grad, a, b, c, d, e = train_control(
-                    self.args, self.log_prior, self.causal_model_optimizer, self.save_folder, train_data_loader, self.causal_model, self.epoch)
+#             lowest_loss=np.inf
+#             for i in range(1000):
+#                 print(str(i), 'of warm up training', self.args.save_folder, lowest_loss)
+#                 nll, nll_lasttwo, kl, mse, control_constraint_loss, lr, rel_graphs, rel_graphs_grad, a, b, c, d, e = train_control(
+#                     self.args, self.log_prior, self.causal_model_optimizer, self.save_folder, train_data_loader, self.causal_model, self.epoch)
 
-                # val_dataset should be continuous, more coverage
-                nll_val, nll_lasttwo_val, kl_val, mse_val, a_val, b_val, c_val, control_constraint_loss_val, nll_lasttwo_5_val, nll_lasttwo_10_val, nll_lasttwo__1_val, nll_lasttwo_1_val = val_control(
-                    self.args, self.log_prior, self.logger, self.save_folder, self.valid_data_loader, self.epoch, self.causal_model)
-                if nll_val<lowest_loss:
-                    print('new lowest_loss', nll_val)
-                    lowest_loss=nll_val
-                    torch.save([self.causal_model.state_dict(), self.causal_model.rel_graph],
-                       os.path.join(self.args.save_folder, load_weights))
+#                 # val_dataset should be continuous, more coverage
+#                 nll_val, nll_lasttwo_val, kl_val, mse_val, a_val, b_val, c_val, control_constraint_loss_val, nll_lasttwo_5_val, nll_lasttwo_10_val, nll_lasttwo__1_val, nll_lasttwo_1_val = val_control(
+#                     self.args, self.log_prior, self.logger, self.save_folder, self.valid_data_loader, self.epoch, self.causal_model)
+#                 if nll_val<lowest_loss:
+#                     print('new lowest_loss', nll_val)
+#                     lowest_loss=nll_val
+#                     torch.save([self.causal_model.state_dict(), self.causal_model.rel_graph],
+#                        os.path.join(self.args.save_folder, load_weights))
+                
 
+#                 self.logger.log('val', self.causal_model, i, nll_val, nll_lasttwo_val, kl_val=kl_val, mse_val=mse_val, a_val=a_val, b_val=b_val, c_val=c_val, control_constraint_loss_val=control_constraint_loss_val,
+#                                 nll_lasttwo_5_val=nll_lasttwo_5_val,  nll_lasttwo_10_val=nll_lasttwo_10_val, nll_lasttwo__1_val=nll_lasttwo__1_val, nll_lasttwo_1_val=nll_lasttwo_1_val, scheduler=self.scheduler)
 
-                self.logger.log('val', self.causal_model, i, nll_val, nll_lasttwo_val, kl_val=kl_val, mse_val=mse_val, a_val=a_val, b_val=b_val, c_val=c_val, control_constraint_loss_val=control_constraint_loss_val,
-                                nll_lasttwo_5_val=nll_lasttwo_5_val,  nll_lasttwo_10_val=nll_lasttwo_10_val, nll_lasttwo__1_val=nll_lasttwo__1_val, nll_lasttwo_1_val=nll_lasttwo_1_val, scheduler=self.scheduler)
-
-                self.logger.log('train', self.causal_model, i, nll, nll_lasttwo, kl_train=kl, mse_train=mse, control_constraint_loss_train=control_constraint_loss, lr_train=lr, rel_graphs=rel_graphs,
-                                rel_graphs_grad=rel_graphs_grad, msg_hook_weights_train=a, nll_lasttwo_5_train=b, nll_lasttwo_10_train=c, nll_lasttwo__1_train=d, nll_lasttwo_1_train=e)
-
-        else:
-            weights, graph = torch.load(os.path.join(
-                self.args.save_folder, load_weights))
-            self.causal_model.load_state_dict(weights)
-            self.causal_model.rel_graph = graph.cuda()
-            print('warm up weights loaded.')
+#                 self.logger.log('train', self.causal_model, i, nll, nll_lasttwo, kl_train=kl, mse_train=mse, control_constraint_loss_train=control_constraint_loss, lr_train=lr, rel_graphs=rel_graphs,
+#                                 rel_graphs_grad=rel_graphs_grad, msg_hook_weights_train=a, nll_lasttwo_5_train=b, nll_lasttwo_10_train=c, nll_lasttwo__1_train=d, nll_lasttwo_1_train=e)
+                
+#         else:
+#             weights, graph = torch.load(os.path.join(
+#                 self.args.save_folder, load_weights))
+#             self.causal_model.load_state_dict(weights)
+#             self.causal_model.rel_graph = graph.cuda()
+#             print('warm up weights loaded.')
 
         self.epoch += 1
         if feature_extractors:

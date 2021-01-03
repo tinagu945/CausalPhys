@@ -1,5 +1,6 @@
 import time
 import torch
+from torch.distributions import Categorical
 from utils.functions import *
 
 
@@ -83,17 +84,16 @@ def train_control(args, log_prior, optimizer, save_folder, train_loader,
             print('batch_idx', batch_idx)
             print('Train', control_constraint_loss.item(),
                   loss_kl.item(), loss_nll.item(), loss_nll_lasttwo.item(), loss_nll_lasttwo_series[0].item())
-            if (not args.gt_A) and (not args.all_connect):
-                rel_graphs.append(decoder.rel_graph.detach().cpu().numpy())
-                # rel_graphs_grad.append(
-                #     decoder.rel_graph.grad.detach().cpu().numpy())
+        if (not args.gt_A) and (not args.all_connect):
+            rel_graphs.append(decoder.rel_graph.detach().cpu().numpy())
+            # rel_graphs_grad.append(
+            #     decoder.rel_graph.grad.detach().cpu().numpy())
 
         del loss, output, logits, target, data, prob
 
     print('Train AVG this epoch', np.mean(control_train),
           np.mean(kl_train), np.mean(nll_train), np.mean(nll_train_lasttwo))
-    print('epoch', epoch, decoder.rel_graph.softmax(-1)[:, :, -16:, :],
-          decoder.rel_graph.size())
+    print('epoch', epoch, decoder.rel_graph.softmax(-1)[:, :, -16:, :], Categorical(logits=decoder.rel_graph).entropy().sum(), decoder.rel_graph.size())
 
     return np.mean(nll_train), np.mean(nll_train_lasttwo), np.mean(kl_train), np.mean(mse_train), np.mean(control_train), optimizer.param_groups[0]['lr'], rel_graphs, rel_graphs_grad, 0, np.mean(nll_train_lasttwo_5), np.mean(nll_train_lasttwo_10), np.mean(nll_train_lasttwo__1), np.mean(nll_train_lasttwo_1)
 # np.mean(msg_hook_mean)

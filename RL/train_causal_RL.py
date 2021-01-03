@@ -6,6 +6,7 @@ import os
 import datetime
 import sys
 import itertools
+import copy
 
 from torch.optim import lr_scheduler
 from torch.utils.tensorboard import SummaryWriter
@@ -22,9 +23,10 @@ from data.dataset_utils import *
 from data.generate_dataset import generate_dataset_discrete, get_noise_std
 from RL.PPO_discrete import *
 from AL.AL_env import *
+from AL.AL_env_entropy import *
 from data.simulator import RolloutSimulator
 from data.scenarios import FrictionSliding
-from RL.general_parser import general_parser
+from utils.general_parser import general_parser
 
 parser = general_parser()
 parser.add_argument('--rl-epochs', type=int, default=1000,
@@ -147,21 +149,40 @@ else:
 betas = (0.9, 0.999)
 eps_clip = 0.2
 
-values = [[0.0, 1.0, 0.3333333333333333, 0.8888888888888888, 0.2222222222222222, 0.7777777777777777], [0.0, 1.0, 0.4444444444444444, 0.5555555555555556,
-                                                                                                       0.3333333333333333, 0.8888888888888888], [0.0, 0.56, 0.4977777777777778, 0.2488888888888889, 0.37333333333333335, 0.06222222222222223]]
+values = [[0.0, 0.2222222222222222, 0.3333333333333333, 0.7777777777777777, 0.8888888888888888, 1.0], [0.0, 0.3333333333333333, 0.4444444444444444, 0.5555555555555556,
+                                                                                                       0.8888888888888888, 1.0], [0.0, 0.06222222222222223, 0.2488888888888889, 0.37333333333333335, 0.4977777777777778, 0.56]]
 
 all_obj = [list(i) for i in list(itertools.product(*values))]
 # all_obj = [[0, 1, 1], [1, 1, 1]]
 assert args.initial_obj_num == len(all_obj)
 
-discrete_mapping = [all_obj, [0.53, 1.5, 1.2844444444444445, 1.1766666666666667, 0.7455555555555555, 0.6377777777777778], [
-    0.0, 1.0, 0.8888888888888888, 0.7777777777777777, 0.1111111111111111, 0.4444444444444444], [0.0, 1.0, 0.1111111111111111, 0.5555555555555556, 0.3333333333333333, 0.4444444444444444]]
+discrete_mapping = [all_obj, [0.53, 0.6377777777777778, 0.7455555555555555, 1.1766666666666667, 1.2844444444444445, 1.5], [
+    0.0, 0.1111111111111111, 0.4444444444444444, 0.7777777777777777, 0.8888888888888888, 1.0], [0.0, 0.1111111111111111, 0.3333333333333333, 0.4444444444444444, 0.5555555555555556, 1.0]]
 # discrete_mapping = [all_obj, [0.53, 0.637], [0, 0.11], [0, 0.11]]
 discrete_mapping_grad = [lambda x: 0.53+x *
                          (1.5-0.53)/5, lambda x: 0+x*(1-0)/5, lambda x: 0+x*(1-0)/5]
 assert args.action_dim == len(discrete_mapping)-1
 # action_dim: exclude objects
 # discrete mapping: include objects
+
+if 'init_data.npy' not in os.listdir(args.save_folder):
+    decomposed_discrete_mapping=copy.deepcopy(discrete_mapping)
+    decomposed_discrete_mapping[0] = sorted(values[2])
+    decomposed_discrete_mapping.insert(0, sorted(values[1]))
+    decomposed_discrete_mapping.insert(0, sorted(values[0]))
+            
+    queries=[]
+    for i in range(100):
+        query = []
+        # for j in range(data_num_per_obj):
+        for k in range(args.input_atoms):
+            setting = np.random.randint(
+                0,  (len(decomposed_discrete_mapping[k]))//2)
+            query.append(setting)
+        queries.append(query)
+    print('queries', queries)
+    np.save(os.path.join(args.save_folder, 'init_data.npy'), np.array(queries))
+    
 
 memory = Memory()
 ppo = PPO(args, discrete_mapping, betas, eps_clip)
@@ -185,9 +206,10 @@ learning_assess_data, learning_assess_data_noise = generate_dataset_discrete(
     learning_assess_values, scenario, True)
 learning_assess_data = torch.from_numpy(learning_assess_data).float().cuda()
 
-env = AL_env(args, rel_rec, rel_send,
+# env = AL_env(args, rel_rec, rel_send,
+#              learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad)
+env = AL_env_entropy(args, rel_rec, rel_send,
              learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad)
-
 
 def main():
     # Train model

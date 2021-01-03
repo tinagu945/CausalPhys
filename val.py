@@ -2,7 +2,7 @@ from utils.logger import Logger
 from utils.functions import *
 
 
-def val_control(args, log_prior, logger, save_folder, valid_loader, epoch, decoder, scheduler):
+def val_control(args, log_prior, logger, save_folder, valid_loader, epoch, decoder):
     nll_val = []
     nll_val_lasttwo = []
     nll_val_lasttwo_1 = []
@@ -24,8 +24,6 @@ def val_control(args, log_prior, logger, save_folder, valid_loader, epoch, decod
         if args.val_grouped:
             data, which_node, edge = all_data[0].cuda(
             ), all_data[1].cuda(), all_data[2].cuda()
-            # import pdb
-            # pdb.set_trace()
             output, logits, msg_hook = decoder(data)
             control_constraint_loss = control_loss(
                 msg_hook, which_node, args.input_atoms, args.val_variations)

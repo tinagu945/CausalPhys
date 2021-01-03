@@ -16,88 +16,18 @@ from train import train_control
 from val import val_control
 from test import test_control
 from utils.logger import Logger
-from data.AL_sampler import RandomPytorchSampler
+from AL.AL_control_sampler import RandomPytorchSampler
 from data.datasets import *
 from data.dataset_utils import *
+from utils.general_parser import general_parser
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--seed', type=int, default=42, help='Random seed.')
+parser = general_parser()
 parser.add_argument('--epochs', type=int, default=500,
                     help='Number of epochs to train.')
-parser.add_argument('--train-bs', type=int, default=144,
-                    help='Number of samples per batch during training.')
-parser.add_argument('--val-bs', type=int, default=128,
-                    help='Number of samples per batch during validation and test.')
-parser.add_argument('--lr', type=float, default=1e-4,
-                    help='Initial learning rate.')
-parser.add_argument('--decoder-hidden', type=int, default=256,
-                    help='Number of hidden units.')
-parser.add_argument('--temp', type=float, default=0.5,
-                    help='Temperature for Gumbel softmax.')
-parser.add_argument('--input-atoms', type=int, default=6,
-                    help='Number of atoms need to be controlled in simulation.')
-parser.add_argument('--suffix', type=str, default='causal_vel_delta_grouped_46656',
-                    help='Suffix for training data (e.g. "_charged".')
-parser.add_argument('--val-suffix', type=str, default=None,
-                    help='Suffix for valid and testing data (e.g. "_charged".')
-parser.add_argument('--decoder-dropout', type=float, default=0.0,
-                    help='Probability of an element to be zeroed.')
-parser.add_argument('--save-folder', type=str, default='logs',
-                    help='Where to save the trained model and logs.')
-parser.add_argument('--edge-types', type=int, default=2,
-                    help='The number of edge types to infer.')
-parser.add_argument('--dims', type=int, default=9,
-                    help='The number of input dimensions (position + velocity).')
-parser.add_argument('--timesteps', type=int, default=40,
-                    help='The number of time steps per sample.')
-parser.add_argument('--prediction-steps', type=int, default=20, metavar='N',
-                    help='Num steps to predict before re-using teacher forcing.')
-parser.add_argument('--lr-decay', type=int, default=40,
-                    help='After how epochs to decay LR by a factor of gamma.')
-parser.add_argument('--gamma', type=float, default=0.5,
-                    help='LR decay factor.')
-parser.add_argument('--skip-first', action='store_true', default=True,
-                    help='Skip first edge type in decoder, i.e. it represents no-edge.')
-parser.add_argument('--var', type=float, default=5e-5,
-                    help='Output variance.')
-parser.add_argument('--hard', action='store_true', default=False,
-                    help='Uses discrete samples in training forward pass.')
-parser.add_argument('--self-loop', action='store_true', default=True,
-                    help='Whether graph contains self loop.')
-parser.add_argument('--kl', type=float, default=10,
-                    help='Whether to include kl as loss.')
-parser.add_argument('--variations', type=int, default=6,
-                    help='#values for one controlled var in training dataset.')
-parser.add_argument('--val-variations', type=int, default=4,
-                    help='#values for one controlled var in validation dataset.')
-parser.add_argument('--target-atoms', type=int, default=2,
-                    help='#atoms for results.')
-parser.add_argument('--comment', type=str, default='',
-                    help='Additional info for the run.')
-parser.add_argument('--train-size', type=int, default=None,
-                    help='#datapoints for train')
-parser.add_argument('--val-size', type=int, default=None,
-                    help='#datapoints for val')
-parser.add_argument('--test-size', type=int, default=None,
-                    help='#datapoints for test')
 parser.add_argument('--grouped', action='store_true', default=False,
                     help='Whether we want to do the grouped training.')
 parser.add_argument('--need-grouping', action='store_true', default=False,
                     help='If grouped is True, whether the dataset actually needs grouping.')
-parser.add_argument('--val-need-grouping', action='store_true', default=True,
-                    help='If grouped is True, whether the validation dataset actually needs grouping.')
-parser.add_argument('--val-grouped', action='store_true', default=True,
-                    help='Whether to group the valid and test dataset')
-parser.add_argument('--control-constraint', type=float, default=0.0,
-                    help='Coefficient for control constraint loss')
-parser.add_argument('--gt-A', action='store_true', default=False,
-                    help='Whether use the ground truth adjacency matrix, useful for debuging the encoder.')
-parser.add_argument('--train-log-freq', type=int, default=10,
-                    help='The number of input dimensions (position + velocity).')
-parser.add_argument('--val-log-freq', type=int, default=5,
-                    help='The number of input dimensions (position + velocity).')
-parser.add_argument('--all-connect', action='store_true', default=False,
-                    help='Whether the adjancency matrix is fully connected and not trainable.')
 
 args = parser.parse_args()
 args.num_atoms = args.input_atoms+args.target_atoms
@@ -132,10 +62,8 @@ else:
 # This is not adjacency matrix since it's 49*7, not 7*7!
 rel_rec = np.array(encode_onehot(np.where(off_diag)[0]), dtype=np.float32)
 rel_send = np.array(encode_onehot(np.where(off_diag)[1]), dtype=np.float32)
-rel_rec = torch.FloatTensor(rel_rec)
-rel_send = torch.FloatTensor(rel_send)
-rel_rec = rel_rec.cuda()
-rel_send = rel_send.cuda()
+rel_rec = torch.FloatTensor(rel_rec).cuda()
+rel_send = torch.FloatTensor(rel_send).cuda()
 
 decoder = MLPDecoder_Causal(args, rel_rec, rel_send).cuda()
 optimizer = optim.Adam(list(decoder.parameters())+[decoder.rel_graph],
@@ -150,15 +78,9 @@ tril_indices = get_tril_offdiag_indices(args.num_atoms)
 prior = np.array([0.9, 0.1])  # TODO: hard coded for now
 print("Using prior")
 print(prior)
-log_prior = torch.FloatTensor(np.log(prior))
-log_prior = torch.unsqueeze(log_prior, 0)
-log_prior = torch.unsqueeze(log_prior, 0)
-
-
-log_prior = log_prior.cuda()
-decoder.cuda()
-triu_indices = triu_indices.cuda()
-tril_indices = tril_indices.cuda()
+log_prior = torch.FloatTensor(np.log(prior)).cuda()
+log_prior = torch.unsqueeze(log_prior, 0).cuda()
+log_prior = torch.unsqueeze(log_prior, 0).cuda()
 
 
 def main():
@@ -203,21 +125,29 @@ def main():
         #     'test_'+args.val_suffix, size=args.val_size, self_loop=args.self_loop, control=False)
         # test_data_loader = DataLoader(
         #     test_data, batch_size=args.val_bs, shuffle=True)
-
+    print('size of training dataset', len(train_data),
+          'size of valid dataset', len(valid_data))
     logger = Logger(save_folder)
     print('Doing initial validation before training...')
-    # val_control(
-    #     args, log_prior, logger, save_folder, valid_data_loader, -1, decoder, scheduler)
+    nll_val, nll_lasttwo_val, kl_val, mse_val, a_val, b_val, c_val, control_constraint_loss_val, nll_lasttwo_5_val, nll_lasttwo_10_val, nll_lasttwo__1_val, nll_lasttwo_1_val = val_control(
+        args, log_prior, logger, args.save_folder, valid_data_loader, -1, decoder)
 
     for epoch in range(args.epochs):
         # TODO: when len(train_dataset) reaches budget, force stop
         # print('#batches in train_dataset', len(train_dataset)/args.train_bs)
-        nll, nll_lasttwo, kl, mse, control_constraint_loss, lr, rel_graphs, rel_graphs_grad, a, b, c, d, e, f = train_control(
-            args, log_prior, optimizer, save_folder, train_data_loader, valid_data_loader, decoder, epoch)
+        nll, nll_lasttwo, kl, mse, control_constraint_loss, lr, rel_graphs, rel_graphs_grad, a, b, c, d, e = train_control(
+            args, log_prior, optimizer, save_folder, train_data_loader, decoder, epoch)
 
         if epoch % args.train_log_freq == 0:
-            logger.log('train', decoder, epoch, nll, nll_lasttwo, kl=kl, mse=mse, control_constraint_loss=control_constraint_loss, lr=lr, rel_graphs=rel_graphs,
-                       rel_graphs_grad=rel_graphs_grad, msg_hook_weights=a, nll_train_lasttwo=b, nll_train_lasttwo_5=c, nll_train_lasttwo_10=d, nll_train_lasttwo__1=e, nll_train_lasttwo_1=f)
+            logger.log('train', decoder, epoch, nll, nll_lasttwo, kl=kl, mse=mse, control_constraint_loss=control_constraint_loss, lr_train=lr, rel_graphs=rel_graphs,
+                       rel_graphs_grad=rel_graphs_grad, msg_hook_weights=a, nll_train_lasttwo=b, nll_lasttwo_10_train=c, nll_lasttwo__1_train=d, nll_lasttwo_1_train=e)
+
+        if epoch % args.train_log_freq == 0:
+            nll_val, nll_lasttwo_val, kl_val, mse_val, a_val, b_val, c_val, control_constraint_loss_val, nll_lasttwo_5_val, nll_lasttwo_10_val, nll_lasttwo__1_val, nll_lasttwo_1_val = val_control(
+                args, log_prior, logger, args.save_folder, valid_data_loader, epoch, decoder)
+
+            logger.log('val', decoder, epoch, nll_val, nll_lasttwo_val, kl_val=kl_val, mse_val=mse_val, a_val=a_val, b_val=b_val, c_val=c_val, control_constraint_loss_val=control_constraint_loss_val,
+                       nll_lasttwo_5_val=nll_lasttwo_5_val,  nll_lasttwo_10_val=nll_lasttwo_10_val, nll_lasttwo__1_val=nll_lasttwo__1_val, nll_lasttwo_1_val=nll_lasttwo_1_val, scheduler=scheduler)
 
         # if epoch % args.val_log_freq == 0:
         #     _ = val_control(

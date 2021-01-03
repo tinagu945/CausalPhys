@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import copy
 from torch.utils.data import Dataset, TensorDataset
 
 
@@ -207,7 +208,8 @@ class RLDataset(Dataset):
     """For data generated on the fly"""
 
     def __init__(self, data, edge, mins, maxs):
-        self.data = data
+        self.orig_data = copy.deepcopy(data)
+        self.data = copy.deepcopy(data)
         self.edge = edge
         self.mins = mins
         self.maxs = maxs
@@ -227,6 +229,7 @@ class RLDataset(Dataset):
 
     def update(self, new_data):
         """return: A new dataloader from a new dataset"""
+        self.orig_data = torch.cat((self.orig_data, new_data), dim=0)
         for i in range(self.num_atoms):
             new_data[:, i, :, 0] = (
                 new_data[:, i, :, 0] - self.mins[i])*2/(self.maxs[i]-self.mins[i])-1

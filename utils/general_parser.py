@@ -79,7 +79,7 @@ def general_parser():
                         help='How many epochs every logging for causal model validating.')
     parser.add_argument('--all-connect', action='store_true', default=False,
                         help='Whether the adjancency matrix is fully connected and not trainable.')
-    parser.add_argument('--intervene-strength', type=int, default=1,
+    parser.add_argument('--intervene-strength', type=float, default=1,
                         help='How much confidence we add to the relation graph every time a noisy intervention is performed.')
 
     return parser

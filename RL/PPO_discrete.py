@@ -73,7 +73,7 @@ class ActorCritic(nn.Module):
             set_learning_assess_feat.expand(num_obj, -1), obj_data_features], dim=-1)
 
         all_state_feat = self.action_feature(all_state)
-        # find the most_wanted setting by last dimension.
+        # find the most_wanted setting by first dimension.
         propensity = self.softmax(self.action_player[0](all_state_feat))[:, 0]
         dist = Categorical(propensity)
         most_wanted = dist.sample()

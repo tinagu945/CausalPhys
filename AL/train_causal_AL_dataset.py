@@ -23,7 +23,7 @@ from AL.AL_nocontrol_sampler import RandomSimulatorSampler
 from AL_env import *
 from data.simulator import RolloutSimulator
 from data.scenarios import FrictionSliding
-from RL.general_parser import general_parser
+from utils.general_parser import general_parser
 
 parser = general_parser()
 parser.add_argument('--patience', type=int, default=5,
@@ -144,19 +144,19 @@ else:
     # test_data_loader = DataLoader(
     #     test_data, batch_size=args.val_bs, shuffle=True)
 
-values = [[0.0, 1.0, 0.3333333333333333, 0.8888888888888888, 0.2222222222222222, 0.7777777777777777], [0.0, 1.0, 0.4444444444444444, 0.5555555555555556,
-                                                                                                       0.3333333333333333, 0.8888888888888888], [0.0, 0.56, 0.4977777777777778, 0.2488888888888889, 0.37333333333333335, 0.06222222222222223]]
+values = [[0.0, 0.2222222222222222, 0.3333333333333333, 0.7777777777777777, 0.8888888888888888, 1.0], [0.0, 0.3333333333333333, 0.4444444444444444, 0.5555555555555556,
+                                                                                                       0.8888888888888888, 1.0], [0.0, 0.06222222222222223, 0.2488888888888889, 0.37333333333333335, 0.4977777777777778, 0.56]]
 
 all_obj = [list(i) for i in list(itertools.product(*values))]
 # all_obj = [[0, 1, 1], [1, 1, 1]]
 assert args.initial_obj_num == len(all_obj)
 
-discrete_mapping = [all_obj, [0.53, 1.5, 1.2844444444444445, 1.1766666666666667, 0.7455555555555555, 0.6377777777777778], [
-    0.0, 1.0, 0.8888888888888888, 0.7777777777777777, 0.1111111111111111, 0.4444444444444444], [0.0, 1.0, 0.1111111111111111, 0.5555555555555556, 0.3333333333333333, 0.4444444444444444]]
+discrete_mapping = [all_obj, [0.53, 0.6377777777777778, 0.7455555555555555, 1.1766666666666667, 1.2844444444444445, 1.5], [
+    0.0, 0.1111111111111111, 0.4444444444444444, 0.7777777777777777, 0.8888888888888888, 1.0], [0.0, 0.1111111111111111, 0.3333333333333333, 0.4444444444444444, 0.5555555555555556, 1.0]]
 # discrete_mapping = [all_obj, [0.53, 0.637], [0, 0.11], [0, 0.11]]
 discrete_mapping_grad = [lambda x: 0.53+x *
                          (1.5-0.53)/5, lambda x: 0+x*(1-0)/5, lambda x: 0+x*(1-0)/5]
-assert args.action_dim == len(discrete_mapping)
+assert args.action_dim == len(discrete_mapping)-1
 
 interval = 0.1
 delta = False
@@ -176,6 +176,9 @@ env = AL_env(args, rel_rec, rel_send,
              learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad)
 
 
+values_ind=[[0,1,2,3,4,5],[0,1,2,3,4,5],[0,1,2,3,4,5]]
+all_values_ind = [list(i) for i in list(itertools.product(*values_ind))]
+ind_dict={str(all_values_ind[i]):i for i in range(len(all_values_ind))}
 def main():
     # Train model
     best_val_loss = np.inf
@@ -184,20 +187,27 @@ def main():
     # training loop
     # Assuming each turn only add 1 new datapoint
     for i_episode in range(env.args.budget):
-        complete_action = sampler.criterion()
-        idx, new_datapoint, query_setting, _ = env.action_to_new_data(
-            complete_action)
+        complete_action_0 = sampler.criterion()
+        print(' i_episode',  i_episode, 'complete_action', complete_action_0)
+        env.f.write(str(complete_action_0))
+        env.f.write('\n')
+        env.f.flush()
+        complete_action=[ind_dict[str(complete_action_0[:3])]]+complete_action_0[3:]
+        
+        new_datapoint, query_setting, _ = env.action_to_new_data(
+                    complete_action)
         repeat = env.process_new_data(
             complete_action, new_datapoint, env.args.intervene)
         val_loss = env.train_causal(
-            idx, query_setting, new_datapoint)
-        print(i_episode, 'repeat', repeat, 'intervened nodes', env.intervened_nodes, 'val_loss', val_loss,
+            int(complete_action[0]), query_setting, new_datapoint)
+        print('repeat', repeat, 'intervened nodes', env.intervened_nodes, 'val_loss', val_loss,
               'self.train_dataset.data.size(0)', env.train_dataset.data.size(0))
         env.logger.log_arbitrary(env.epoch,
                                  RLAL_train_dataset_size=env.train_dataset.data.size(
                                      0),
                                  RLAL_repeat=repeat,
-                                 RLAL_num_intervention=len(env.intervened_nodes), RLAL_causal_converge=env.early_stop_monitor.stopped_epoch)
+                                 RLAL_num_intervention=len(env.intervened_nodes),
+                                 RLAL_causal_converge=env.early_stop_monitor.stopped_epoch)
 
 
 if __name__ == "__main__":
