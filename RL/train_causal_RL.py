@@ -29,8 +29,10 @@ from data.scenarios import FrictionSliding
 from utils.general_parser import general_parser
 
 parser = general_parser()
+parser.add_argument('--K-epochs', type=int, default=10,
+                    help='#epochs for each PPO memory updating.')
 parser.add_argument('--rl-epochs', type=int, default=1000,
-                    help='#epochs for each PPO memory training.')
+                    help='#epochs for each PPO training.')
 parser.add_argument('--patience', type=int, default=5,
                     help='Number of epochs after which if validation error has not decreased, we stop the training.')
 parser.add_argument('--rl-log-freq', type=int, default=1,

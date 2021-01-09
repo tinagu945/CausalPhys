@@ -21,6 +21,7 @@ from data.dataset_utils import *
 from data.generate_dataset import get_noise_std
 from AL.AL_nocontrol_sampler import RandomSimulatorSampler
 from AL_env import *
+from AL.AL_env_entropy import *
 from data.simulator import RolloutSimulator
 from data.scenarios import FrictionSliding
 from utils.general_parser import general_parser
@@ -30,8 +31,8 @@ parser.add_argument('--patience', type=int, default=5,
                     help='Number of epochs after which if validation error has not decreased, we stop the training.')
 parser.add_argument('--rl-log-freq', type=int, default=1,
                     help='How many epochs every logging for rl training.')
-# parser.add_argument('--al-epochs', type=float, default=-500,
-#                     help='Stop the entire training (end episodes) of PPO if avg_reward > solved_reward')
+parser.add_argument('--al-epochs', type=int, default=500,
+                    help='Stop the entire training (end episodes) of PPO if avg_reward > solved_reward')
 # parser.add_argument('--extractors-update-epoch', type=int, default=20,
 #                     help='How many epochs every gradient descent for feature extractors.')
 # parser.add_argument('--rl-update-timestep', type=int, default=10,
@@ -172,9 +173,10 @@ simulator = RolloutSimulator(scenario)
 sampler = RandomSimulatorSampler(simulator, discrete_mapping)
 
 learning_assess_data = None
-env = AL_env(args, rel_rec, rel_send,
+# env = AL_env(args, rel_rec, rel_send,
+#              learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad)
+env = AL_env_entropy(args, rel_rec, rel_send,
              learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad)
-
 
 values_ind=[[0,1,2,3,4,5],[0,1,2,3,4,5],[0,1,2,3,4,5]]
 all_values_ind = [list(i) for i in list(itertools.product(*values_ind))]
@@ -186,29 +188,48 @@ def main():
     env.reset(feature_extractors=False)
     # training loop
     # Assuming each turn only add 1 new datapoint
-    for i_episode in range(env.args.budget):
-        complete_action_0 = sampler.criterion()
-        print(' i_episode',  i_episode, 'complete_action', complete_action_0)
-        env.f.write(str(complete_action_0))
-        env.f.write('\n')
+    for i_episode in range(env.args.al_epochs):
+        env.reset(feature_extractors=False)
+        env.f.write(''.join(['\nepisode', str(i_episode), '\n']))
         env.f.flush()
-        complete_action=[ind_dict[str(complete_action_0[:3])]]+complete_action_0[3:]
+        for t in range(env.args.budget):
+            complete_action_0 = sampler.criterion()
+            print(' i_episode',  i_episode, 'complete_action', complete_action_0)
+            env.f.write(str(complete_action_0))
+            env.f.write('\n')
+            env.f.flush()
+            complete_action=[ind_dict[str(complete_action_0[:3])]]+complete_action_0[3:]
+
+            new_datapoint, query_setting, _ = env.action_to_new_data(
+                        complete_action)
+            repeat, num_intervention = env.process_new_data(
+                        complete_action, new_datapoint, env.args.intervene)
+
+            idx = int(complete_action[0])
+            env.obj_data[idx].append(new_datapoint)
+            env.train_dataset.update(new_datapoint.clone())
+
+    #         val_loss = env.train_causal(
+    #             int(complete_action[0]), query_setting, new_datapoint)
+            val_loss = 0
+            env.epoch += 1
+            print('repeat', repeat, 'intervened nodes', env.intervened_nodes,
+                      'val_loss', val_loss, 'total interventions', env.total_intervention,
+                      'self.train_dataset.data.size(0)', env.train_dataset.data.size(0))
+            env.logger.log_arbitrary(env.epoch,
+                                     RLAL_train_dataset_size=env.train_dataset.data.size(
+                                         0),
+                                     RLAL_repeat=repeat,
+                                     RLAL_total_intervention=env.total_intervention,
+                                     RLAL_num_intervention=len(env.intervened_nodes),
+                                     RLAL_causal_converge=env.early_stop_monitor.stopped_epoch)
         
-        new_datapoint, query_setting, _ = env.action_to_new_data(
-                    complete_action)
-        repeat = env.process_new_data(
-            complete_action, new_datapoint, env.args.intervene)
-        val_loss = env.train_causal(
-            int(complete_action[0]), query_setting, new_datapoint)
-        print('repeat', repeat, 'intervened nodes', env.intervened_nodes, 'val_loss', val_loss,
-              'self.train_dataset.data.size(0)', env.train_dataset.data.size(0))
-        env.logger.log_arbitrary(env.epoch,
-                                 RLAL_train_dataset_size=env.train_dataset.data.size(
-                                     0),
-                                 RLAL_repeat=repeat,
-                                 RLAL_num_intervention=len(env.intervened_nodes),
-                                 RLAL_causal_converge=env.early_stop_monitor.stopped_epoch)
-
-
+        env.logger.log_arbitrary(i_episode,
+                         RLAL_episode_train_dataset_size=env.train_dataset.data.size(
+                             0),
+                         RLAL_episode_interventioned_nodes=len(env.intervened_nodes), 
+                         RLAL_episode_total_intervention=env.total_intervention)
+#                                  RLAL_episode_penalty=-reward,
+#                          RLAL_episode_length=t)
 if __name__ == "__main__":
     main()

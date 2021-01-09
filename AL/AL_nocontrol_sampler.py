@@ -63,9 +63,9 @@ class RandomSimulatorSampler(AbstractSimulatorSampler):
         self.discrete_mapping = discrete_mapping
 
     def criterion(self):
-        choice = []
-        for i in range(6):
-            choice.append(np.random.randint(3,high=6))
+        choice = [5, 3, 2]
+        for i in range(3):
+            choice.append(np.random.randint(6))
 #         for dm in self.discrete_mapping:
 #             choice.append(np.random.randint(len(dm)//2))
         return choice

@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import torch
 from torch.distributions import Categorical
 # from utils.functions import gumbel_softmax
@@ -49,27 +50,33 @@ def train_rl(env, memory, ppo):
                     complete_action)
                 repeat, num_intervention = env.process_new_data(
                     complete_action, new_datapoint, env.args.intervene)
-                val_loss = env.train_causal(
-                    int(complete_action[0]), query_setting, new_datapoint)
+                
+                idx = int(complete_action[0])
+                env.obj_data[idx].append(new_datapoint)
+                env.train_dataset.update(new_datapoint.clone())
+#                 print('data for object', idx, np.stack(env.obj_data[idx])[:, 0, :, 0, 0])
+                
+#                 val_loss = env.train_causal()
+                val_loss = 0
+                env.epoch += 1
                 state, reward, done = env.step_entropy(num_intervention)
 #                 state, reward, done = env.step(val_loss)
                 print('repeat', repeat, 'intervened nodes', env.intervened_nodes,
                       'val_loss', val_loss, 'total interventions', env.total_intervention,
                       'penalty', -reward, 'self.train_dataset.data.size(0)', env.train_dataset.data.size(0))
                 env.logger.log_arbitrary(env.epoch,
-                                         RLAL_train_dataset_size=env.train_dataset.data.size(
-                                             0),
                                          RLAL_repeat=repeat,
                                          RLAL_interventioned_nodes=len(env.intervened_nodes), 
                                          RLAL_total_intervention=env.total_intervention,
                                          RLAL_penalty=-reward,
-                                         RLAL_episode_length=t,
                                          RLAL_causal_converge=env.early_stop_monitor.stopped_epoch)
+        
+                env.f.write(str(env.intervened_nodes))
+                env.f.write('\n')
+                env.f.flush()
 
-            # Saving reward and is_terminal:
             memory.rewards.append(reward)
             memory.is_terminals.append(done)
-
             # update if its time
             if timestep % env.args.rl_update_timestep == 0:
                 ppo.update(env, memory)
@@ -82,9 +89,14 @@ def train_rl(env, memory, ppo):
                 break
 
         avg_length += t
-
-        # logging
-        env.logger.log_arbitrary(i_episode, episode_penalty=-reward+t-1)
+        env.logger.log_arbitrary(i_episode,
+                                 RLAL_episode_train_dataset_size=env.train_dataset.data.size(
+                                     0),
+                                 RLAL_episode_interventioned_nodes=len(env.intervened_nodes), 
+                                 RLAL_episode_total_intervention=env.total_intervention,
+#                                  RLAL_episode_penalty=-reward,
+                                 RLAL_episode_length=t)
+        
         torch.save(ppo.policy.state_dict(), os.path.join(
             env.logger.save_folder, 'PPO_{}.pth'.format(str(i_episode))))
         if i_episode % env.args.rl_log_freq == 0:

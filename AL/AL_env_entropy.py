@@ -214,7 +214,7 @@ class AL_env_entropy(object):
                             # 1] += relations*5
         return repeat, num_intervention
 
-    def train_causal(self, idx, action, new_datapoint):
+    def train_causal(self):
         """[summary]
 
             Args:
@@ -227,12 +227,8 @@ class AL_env_entropy(object):
             """
         # GPUtil.showUtilization()
         # self.train_dataset.data size (batch_size, num_nodes, timesteps, feat_dims)
-        self.obj_data[idx].append(new_datapoint)
-        self.train_dataset.update(new_datapoint.clone())
-        print('data for object', idx, np.stack(
-            self.obj_data[idx])[:, 0, :, 0, 0])
-        print('dataset size', len(self.train_dataset),
-              'last ten', self.train_dataset.data[-10:, :, 0, 0])
+#         print('dataset size', len(self.train_dataset),
+#               'last ten', self.train_dataset.data[-10:, :, 0, 0])
         train_data_loader = DataLoader(
             self.train_dataset, batch_size=self.args.train_bs, shuffle=False)
         for i in range(self.args.max_causal_epochs):
@@ -277,7 +273,7 @@ class AL_env_entropy(object):
 #             self.train_dataset.data.size(0) > 150)
 #         done = (reward > self.args.budget) or (
 #             self.train_dataset.data.size(0) > 150)
-        done = (self.train_dataset.data.size(0) > 150)
+        done = (self.train_dataset.data.size(0) == 1)
 
         return state, reward, done
     
@@ -397,7 +393,6 @@ class AL_env_entropy(object):
 #             self.causal_model.rel_graph = graph.cuda()
 #             print('warm up weights loaded.')
 
-        self.epoch += 1
         if feature_extractors:
             # Make sure the output dim of both encoders are the same!
             self.obj_extractor = MLPEncoder(

@@ -74,14 +74,20 @@ class ActorCritic(nn.Module):
 
         all_state_feat = self.action_feature(all_state)
         # find the most_wanted setting by first dimension.
-        propensity = self.softmax(self.action_player[0](all_state_feat))[:, 0]
-        dist = Categorical(propensity)
-        most_wanted = dist.sample()
-        most_wanted_idx = most_wanted.item()
-        # The others do not matter anymore so not updating their log probs.
-        action_logprob = dist.log_prob(most_wanted)
-        dist_entropy = dist.entropy()
+#         propensity = self.softmax(self.action_player[0](all_state_feat))[:, 0]
+#         dist = Categorical(propensity)
+#         most_wanted = dist.sample()
+#         most_wanted_idx = most_wanted.item()
+#         # The others do not matter anymore so not updating their log probs.
+#         action_logprob = dist.log_prob(most_wanted)
+#         dist_entropy = dist.entropy()
+#         complete_action = [most_wanted_idx]
+        
+        most_wanted_idx=200
+        dist_entropy =0
+        action_logprob =0
         complete_action = [most_wanted_idx]
+    
 
         for an in range(1, self.args.action_dim+1):
             action_probs = self.softmax(
@@ -117,11 +123,14 @@ class ActorCritic(nn.Module):
 
             all_state_feat = self.action_feature(all_state)
             # find the most_wanted setting by last dimension.
-            propensity = self.softmax(
-                self.action_player[0](all_state_feat))[:, 0]
-            dist = Categorical(propensity)
-            action_logprob = dist.log_prob(action[0])
-            dist_entropy = dist.entropy()
+#             propensity = self.softmax(
+#                 self.action_player[0](all_state_feat))[:, 0]
+#             dist = Categorical(propensity)
+#             action_logprob = dist.log_prob(action[0])
+#             dist_entropy = dist.entropy()
+
+            dist_entropy =0
+            action_logprob =0
 
             for an in range(1, self.args.action_dim+1):
                 action_probs = self.softmax(
@@ -145,7 +154,7 @@ class PPO:
     def __init__(self, args, discrete_mapping, betas, eps_clip):
         self.gamma = args.gamma
         self.eps_clip = eps_clip
-        self.K_epochs = args.rl_epochs
+        self.K_epochs = args.K_epochs
 
         self.policy = ActorCritic(args, discrete_mapping).to(device)
         self.optimizer = torch.optim.Adam(
@@ -178,10 +187,11 @@ class PPO:
 
         # Optimize policy for K epochs:
         for i in range(self.K_epochs):
-            # print(i)
+#             print(i)
             # Evaluating old actions and values :
             logprobs, state_values, dist_entropy = self.policy.evaluate(
                 old_states, old_actions)
+            import pdb;pdb.set_trace()
 
             # Finding the ratio (pi_theta / pi_theta_old):
             ratios = torch.exp(logprobs - old_logprobs.detach())
@@ -197,17 +207,17 @@ class PPO:
 
             # take gradient step
             self.optimizer.zero_grad()
-            env.obj_extractor_optimizer.zero_grad()
-            env.obj_data_extractor_optimizer.zero_grad()
-            env.learning_assess_extractor_optimizer.zero_grad()
+#             env.obj_extractor_optimizer.zero_grad()
+#             env.obj_data_extractor_optimizer.zero_grad()
+#             env.learning_assess_extractor_optimizer.zero_grad()
 
             loss.mean().backward()
 
             self.optimizer.step()
             # TODO: Doing update for both policy and state representation simultaneously. May change to 2 step in the future using args.extractors-update-epoch.
-            env.obj_extractor_optimizer.step()
-            env.obj_data_extractor_optimizer.step()
-            env.learning_assess_extractor_optimizer.step()
+#             env.obj_extractor_optimizer.step()
+#             env.obj_data_extractor_optimizer.step()
+#             env.learning_assess_extractor_optimizer.step()
 
         # After updating all action types, copy new weights into old policy:
         self.policy_old.load_state_dict(self.policy.state_dict())
