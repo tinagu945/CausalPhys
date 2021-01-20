@@ -78,10 +78,18 @@ def train_rl(env, memory, ppo):
             memory.rewards.append(reward)
             memory.is_terminals.append(done)
             # update if its time
-            if timestep % env.args.rl_update_timestep == 0:
+            if timestep % 512 == 0:
                 ppo.update(env, memory)
                 memory.clear_memory()
-                timestep = 0
+#                 timestep = 0
+
+            if timestep % env.args.rl_update_timestep == 0:
+                print('[PPO] weights updated.')
+                ppo.policy_old.load_state_dict(ppo.policy.state_dict())
+                env.obj_extractor.load_state_dict(env.obj_extractor_new.state_dict())
+                env.obj_data_extractor.load_state_dict(env.obj_data_extractor_new.state_dict())
+                env.learning_assess_extractor.load_state_dict(env.learning_assess_extractor_new.state_dict())
+                ppo.validate_state(env)
 
             running_reward += reward
             if done:

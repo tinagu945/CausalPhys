@@ -29,7 +29,7 @@ from data.scenarios import FrictionSliding
 from utils.general_parser import general_parser
 
 parser = general_parser()
-parser.add_argument('--K-epochs', type=int, default=10,
+parser.add_argument('--K-epochs', type=int, default=50,
                     help='#epochs for each PPO memory updating.')
 parser.add_argument('--rl-epochs', type=int, default=1000,
                     help='#epochs for each PPO training.')
@@ -47,11 +47,11 @@ parser.add_argument('--rl-max-timesteps', type=int, default=1010,
                     help='How many times the PPO policy can try for each episode.')
 parser.add_argument('--rl-lr', type=float, default=0.002,
                     help='lr to train the rl policy')
-parser.add_argument('--obj-extractor-lr', type=float, default=1e-3,
+parser.add_argument('--obj-extractor-lr', type=float, default=1e-4,
                     help='lr to train the obj_extractor')
-parser.add_argument('--obj-data-extractor-lr', type=float, default=1e-3,
+parser.add_argument('--obj-data-extractor-lr', type=float, default=1e-4,
                     help='lr to train the obj_data_extractor')
-parser.add_argument('--learning-assess-extractor-lr', type=float, default=1e-3,
+parser.add_argument('--learning-assess-extractor-lr', type=float, default=1e-4,
                     help='lr to train the learning_assess_extractor')
 
 parser.add_argument('--rl-gamma', type=float, default=0.99,
@@ -62,7 +62,7 @@ parser.add_argument('--extract-feat-dim', type=int, default=32,
                     help='Hidden dimension for obj_extractor, obj_data_extractor, learning_extractor and learning_assess_extractor.')
 parser.add_argument('--budget', type=int, default=1000,
                     help='If the causal model queried for more data than budget, env reset.')
-parser.add_argument('--initial-obj-num', type=int, default=216,
+parser.add_argument('--initial-obj-num', type=int, default=1,
                     help='Number of objects available at the beginning.')
 parser.add_argument('--noise', type=float, default=None,
                     help='The noise the data simulator adds to training data.')
@@ -156,9 +156,10 @@ values = [[0.0, 0.2222222222222222, 0.3333333333333333, 0.7777777777777777, 0.88
 
 all_obj = [list(i) for i in list(itertools.product(*values))]
 # all_obj = [[0, 1, 1], [1, 1, 1]]
-assert args.initial_obj_num == len(all_obj)
+# assert args.initial_obj_num == len(all_obj)
 
-discrete_mapping = [all_obj, [0.53, 0.6377777777777778, 0.7455555555555555, 1.1766666666666667, 1.2844444444444445, 1.5], [
+#all_obj
+discrete_mapping = [[[0.22,0.33,0.24888]], [0.53, 0.6377777777777778, 0.7455555555555555, 1.1766666666666667, 1.2844444444444445, 1.5], [
     0.0, 0.1111111111111111, 0.4444444444444444, 0.7777777777777777, 0.8888888888888888, 1.0], [0.0, 0.1111111111111111, 0.3333333333333333, 0.4444444444444444, 0.5555555555555556, 1.0]]
 # discrete_mapping = [all_obj, [0.53, 0.637], [0, 0.11], [0, 0.11]]
 discrete_mapping_grad = [lambda x: 0.53+x *
@@ -211,7 +212,7 @@ learning_assess_data = torch.from_numpy(learning_assess_data).float().cuda()
 # env = AL_env(args, rel_rec, rel_send,
 #              learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad)
 env = AL_env_entropy(args, rel_rec, rel_send,
-             learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad)
+             learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad, feature_extractors=True)
 
 def main():
     # Train model
