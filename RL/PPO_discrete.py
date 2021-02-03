@@ -65,19 +65,55 @@ class ActorCritic(nn.Module):
     def forward(self):
         raise NotImplementedError
 
+        
+    def act_debug(self, memory, state):
+        """
+        Object-wise setting, then select one setting by argmax
+        state: [set_learning_assess_feat, obj_data_features]. obj_data_features contains first obj feature then obj data feature.
+        """
+        state = state.squeeze()
+        set_learning_assess_feat = state[:2*self.args.extract_feat_dim]
+        obj_data_features = state[2 *
+                                  self.args.extract_feat_dim:].view(-1, 3*self.args.extract_feat_dim)
+        num_obj = obj_data_features.size(0)
+
+        all_state = torch.cat([
+            set_learning_assess_feat.expand(num_obj, -1), obj_data_features], dim=-1)
+        all_state_feat = self.action_feature(all_state)
+        
+        most_wanted_idx=0
+        dist_entropy =0
+        action_logprob =0
+        complete_action = [most_wanted_idx]
+        complete_action_softmax =[]
+    
+
+        for an in range(1, self.args.action_dim+1):
+            action_probs = self.softmax(
+                self.action_player[an](all_state_feat[most_wanted_idx]))
+            dist = Categorical(action_probs)
+            action = dist.sample()
+            complete_action.append(action.item())
+            action_logprob += dist.log_prob(action)
+            dist_entropy += dist.entropy()   
+            complete_action_softmax.append(action_probs)
+        memory.actions.append(torch.stack(complete_action_softmax))
+        return complete_action
+    
+    
     def act(self, memory, state):
         """
         Object-wise setting, then select one setting by argmax
         state: [set_learning_assess_feat, obj_data_features]. obj_data_features contains first obj feature then obj data feature.
         """
         state = state.squeeze()
-#         set_learning_assess_feat = state[:2*self.args.extract_feat_dim]
-#         obj_data_features = state[2 *
-#                                   self.args.extract_feat_dim:].view(-1, 3*self.args.extract_feat_dim)
-#         num_obj = obj_data_features.size(0)
+        set_learning_assess_feat = state[:2*self.args.extract_feat_dim]
+        obj_data_features = state[2 *
+                                  self.args.extract_feat_dim:].view(-1, 3*self.args.extract_feat_dim)
+        num_obj = obj_data_features.size(0)
 
-#         all_state = torch.cat([
-#             set_learning_assess_feat.expand(num_obj, -1), obj_data_features], dim=-1)
+        all_state = torch.cat([
+            set_learning_assess_feat.expand(num_obj, -1), obj_data_features], dim=-1)
 
         all_state_feat = self.action_feature(all_state)
         # find the most_wanted setting by first dimension.
@@ -104,10 +140,11 @@ class ActorCritic(nn.Module):
             complete_action.append(action.item())
             action_logprob += dist.log_prob(action)
             dist_entropy += dist.entropy()
-
-        memory.states.append(state)
+    
+        memory.states.append(state.cpu())
         memory.actions.append(torch.Tensor(complete_action))
-        memory.logprobs.append(action_logprob)
+        memory.logprobs.append(action_logprob.cpu())
+        del state, action_logprob
         return complete_action
 
     def evaluate(self, states, actions):
@@ -164,10 +201,26 @@ class PPO:
         self.K_epochs = args.K_epochs
 
         self.policy = ActorCritic(args, discrete_mapping).to(device)
+        
+        self.player_params = []
+        for i in self.policy.action_player:
+            self.player_params.extend(list(i.parameters()))
         self.optimizer = torch.optim.Adam(
-            self.policy.parameters(), lr=args.rl_lr, betas=betas)
+            list(self.policy.parameters())+self.player_params, lr=args.rl_lr, betas=betas) #self.policy.action_feature[0].weight
+        
+#         for t in self.policy.parameters():
+#             print('1', t.size())
+#         for t in self.policy.action_feature.parameters():
+#             print('2', t.size())
+#         for t in self.policy.value_player.parameters():
+#             print('3', t.size())
+#         import pdb;pdb.set_trace()
         self.policy_old = ActorCritic(args, discrete_mapping).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
+        with torch.no_grad():
+            for i in range(len(self.policy_old.action_player)):
+                for (o, n) in zip(self.policy_old.action_player[i].parameters(), self.policy.action_player[i].parameters()):
+                    o.copy_(n)
 
         self.MseLoss = nn.MSELoss()
         self.count = 0
@@ -245,8 +298,49 @@ class PPO:
                                  SRMSE_val=np.mean(mses))
         print('[PPO] SRMSE_val logged!')
             
-        
+            
+         
+    def update_debug(self, env, memory):
+        # by actions it's actually action softmax probs
+        actions = torch.transpose(torch.stack(memory.actions), 1,2)
+        dataset = TensorDataset(actions)
+        loader = DataLoader(dataset, batch_size=128, shuffle=True)
+        label = torch.Tensor([[4,0,5]]).cuda().long()
+        criterion = nn.CrossEntropyLoss()
+        for i in range(self.K_epochs):
+            print(i)
+            for batch_idx, [old_actions] in enumerate(loader):      
+                old_actions = old_actions.cuda()
+                loss = criterion(old_actions, label.expand((old_actions.size(0), -1)))
+#                 print('batch_idx', batch_idx)
+                
+                self.optimizer.zero_grad()
+                if env.feature_extractors:
+                    env.obj_extractor_optimizer.zero_grad()
+                    env.obj_data_extractor_optimizer.zero_grad()
+                    env.learning_assess_extractor_optimizer.zero_grad()
 
+#                 print('here', self.policy.action_feature[0].weight.grad)
+#                 self.policy.action_feature[0].weight.retain_grad()
+                loss.backward(retain_graph=True)
+#                 import pdb;pdb.set_trace()
+#                 print('hereeeeeee', self.policy.action_feature[0].weight.grad)
+                
+                self.optimizer.step()
+                # TODO: Doing update for both policy and state representation simultaneously. May change to 2 step in the future using args.extractors-update-epoch. 
+                if env.feature_extractors:
+                    env.obj_extractor_optimizer.step()
+                    env.obj_data_extractor_optimizer.step()
+                    env.learning_assess_extractor_optimizer.step()
+                
+                env.logger.log_arbitrary(self.count,
+                                 RL_loss=loss.item())
+                                         
+                self.count += 1
+        print('[PPO] train done.')
+        # After updating all action types, copy new weights into old policy:
+#         self.policy_old.load_state_dict(self.policy.state_dict())
+        
 
 
     def update(self, env, memory):
@@ -273,13 +367,13 @@ class PPO:
 #         import pdb;pdb.set_trace()
 
         # Normalizing the rewards:
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
+        rewards = torch.tensor(rewards, dtype=torch.float32) #.to(device)
         rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-5)
 
         # convert list to tensor
-        old_states = torch.stack(memory.states).to(device).detach()
-        old_actions = torch.stack(memory.actions).to(device).detach()
-        old_logprobs = torch.stack(memory.logprobs).to(device).detach()
+        old_states = torch.stack(memory.states).detach() #to(device).detach()
+        old_actions = torch.stack(memory.actions).detach() #to(device).detach()
+        old_logprobs = torch.stack(memory.logprobs).detach() #to(device).detach()
         dataset = TensorDataset(old_states, old_actions, old_logprobs, rewards)
         loader = DataLoader(dataset, batch_size=128, shuffle=True)
 
@@ -287,6 +381,8 @@ class PPO:
         for i in range(self.K_epochs):
 #             print(i)
             for batch_idx, (old_states, old_actions, old_logprobs, rewards) in enumerate(loader):
+                old_states, old_actions, old_logprobs, rewards = \
+            old_states.cuda(), old_actions.cuda(), old_logprobs.cuda(), rewards.cuda()
                 # Evaluating old actions and values :
                 logprobs, state_values, dist_entropy = self.policy.evaluate(
                     old_states, old_actions)
@@ -303,14 +399,14 @@ class PPO:
                 surr2 = torch.clamp(ratios, 1-self.eps_clip,
                                     1+self.eps_clip) * advantages
                 mse = self.MseLoss(state_values, rewards)
-                print('state_values', state_values)
-                print('rewards', rewards)
+#                 print('state_values', state_values)
+#                 print('rewards', rewards)
                 env.f.write(str(state_values))
                 env.f.write('\n')
                 env.f.write(str(rewards))
                 env.f.write('\n')
                 env.f.flush()
-                loss = -torch.min(surr1, surr2) + mse - 0.01*dist_entropy
+                loss = -torch.min(surr1, surr2) + mse #- 0.01*dist_entropy
                 # print(surr1, surr2, state_values, rewards, dist_entropy)
 
                 # take gradient step
@@ -321,6 +417,7 @@ class PPO:
                     env.learning_assess_extractor_optimizer.zero_grad()
 
                 loss.mean().backward()
+#                 import pdb;pdb.set_trace()
 
                 self.optimizer.step()
                 # TODO: Doing update for both policy and state representation simultaneously. May change to 2 step in the future using args.extractors-update-epoch.
@@ -337,4 +434,8 @@ class PPO:
                 self.count += 1
         print('[PPO] train done.')
         # After updating all action types, copy new weights into old policy:
-#         self.policy_old.load_state_dict(self.policy.state_dict())
+        self.policy_old.load_state_dict(self.policy.state_dict())
+        with torch.no_grad():
+            for i in range(len(self.policy_old.action_player)):
+                for (o, n) in zip(self.policy_old.action_player[i].parameters(), self.policy.action_player[i].parameters()):
+                    o.copy_(n)

@@ -214,6 +214,20 @@ learning_assess_data = torch.from_numpy(learning_assess_data).float().cuda()
 env = AL_env_entropy(args, rel_rec, rel_send,
              learning_assess_data, simulator, log_prior, logger, save_folder, valid_data_loader, valid_data.edge, train_data_min_max[0], train_data_min_max[1], discrete_mapping=discrete_mapping, discrete_mapping_grad=discrete_mapping_grad, feature_extractors=True)
 
+# checkpoint = torch.load('logs_RL/expRL_PPO_2021-01-27T13:01:29.595756_val-suffix_sliding_spaced_fixedgaussian0.1_new_interpolation_noise_0.1_causal-threshold_0.1_intervene_val-size_1000_patience_1_rl-update-timestep_512_rl-epochs_50000_rl-lr_1e-3_budget_17_K-epochs_20/PPO_34816.pth')
+# ppo.policy.load_state_dict(checkpoint)
+
+# checkpoint = torch.load('logs_RL/expRL_PPO_2021-01-27T13:01:29.595756_val-suffix_sliding_spaced_fixedgaussian0.1_new_interpolation_noise_0.1_causal-threshold_0.1_intervene_val-size_1000_patience_1_rl-update-timestep_512_rl-epochs_50000_rl-lr_1e-3_budget_17_K-epochs_20/PPO_others_34816.pth')
+
+# count=0
+# with torch.no_grad():
+#     for i in range(len(ppo.policy_old.action_player)):
+#         for (o, n) in zip(ppo.policy_old.action_player[i].parameters(), ppo.policy.action_player[i].parameters()):
+#             o.copy_(checkpoint['action_players'][count])
+#             n.copy_(checkpoint['action_players'][count])
+#             count += 1
+# import pdb;pdb.set_trace()
+
 def main():
     # Train model
     best_val_loss = np.inf

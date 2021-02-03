@@ -4,7 +4,6 @@ import torch
 from torch.distributions import Categorical
 # from utils.functions import gumbel_softmax
 
-
 def train_rl(env, memory, ppo):
     # render = False
     # logging variables
@@ -64,6 +63,7 @@ def train_rl(env, memory, ppo):
                 print('repeat', repeat, 'intervened nodes', env.intervened_nodes,
                       'val_loss', val_loss, 'total interventions', env.total_intervention,
                       'penalty', -reward, 'self.train_dataset.data.size(0)', env.train_dataset.data.size(0))
+                print('action', complete_action)
                 env.logger.log_arbitrary(env.epoch,
                                          RLAL_repeat=repeat,
                                          RLAL_interventioned_nodes=len(env.intervened_nodes), 
@@ -78,24 +78,38 @@ def train_rl(env, memory, ppo):
             memory.rewards.append(reward)
             memory.is_terminals.append(done)
             # update if its time
-            if timestep % 512 == 0:
+            if timestep % env.args.rl_update_timestep == 0:
                 ppo.update(env, memory)
                 memory.clear_memory()
+                torch.save(ppo.policy.state_dict(), os.path.join(
+                    env.logger.save_folder, 'PPO_{}.pth'.format(str(timestep))))
+                others={}
+                others['action_players']=ppo.player_params
+                others['obj_extractor']=list(env.obj_extractor.parameters())
+                others['obj_data_extractor']=list(env.obj_data_extractor.model.parameters())+\
+                [env.obj_data_extractor.h0, env.obj_data_extractor.c0]
+                others['learning_assess_extractor']=list(env.learning_assess_extractor.parameters())+\
+                [env.learning_assess_extractor.h0, env.learning_assess_extractor.c0]
+                torch.save(others, os.path.join(
+                    env.logger.save_folder, 'PPO_others_{}.pth'.format(str(timestep))))
 #                 timestep = 0
 
-            if timestep % env.args.rl_update_timestep == 0:
+#             if timestep % env.args.rl_update_timestep == 0:
                 print('[PPO] weights updated.')
-                ppo.policy_old.load_state_dict(ppo.policy.state_dict())
-                env.obj_extractor.load_state_dict(env.obj_extractor_new.state_dict())
-                env.obj_data_extractor.load_state_dict(env.obj_data_extractor_new.state_dict())
-                env.learning_assess_extractor.load_state_dict(env.learning_assess_extractor_new.state_dict())
-                ppo.validate_state(env)
+#                 ppo.policy_old.load_state_dict(ppo.policy.state_dict())
+#                 env.obj_extractor.load_state_dict(env.obj_extractor_new.state_dict())
+#                 env.obj_data_extractor.load_state_dict(env.obj_data_extractor_new.state_dict())
+#                 env.learning_assess_extractor.load_state_dict(env.learning_assess_extractor_new.state_dict())
+#                 ppo.validate_state(env)
 
             running_reward += reward
             if done:
                 print('[PPO] done.')
                 break
 
+        env.f.write('total_intervention '+str(env.total_intervention)+'\n')
+        env.f.flush()
+        
         avg_length += t
         env.logger.log_arbitrary(i_episode,
                                  RLAL_episode_train_dataset_size=env.train_dataset.data.size(
@@ -105,9 +119,8 @@ def train_rl(env, memory, ppo):
 #                                  RLAL_episode_penalty=-reward,
                                  RLAL_episode_length=t)
         
-        torch.save(ppo.policy.state_dict(), os.path.join(
-            env.logger.save_folder, 'PPO_{}.pth'.format(str(i_episode))))
         if i_episode % env.args.rl_log_freq == 0:
+                
             avg_length = int(avg_length/env.args.rl_log_freq)
             running_reward = int((running_reward/env.args.rl_log_freq))
 

@@ -169,9 +169,9 @@ class AL_env_entropy(object):
                     [np.zeros((self.args.input_atoms, self.args.timesteps)), threshold]))
                 new_setting = new_datapoint[0, :, 0, 0]
                 for l in self.obj_data.values():
-#                     for d in l:
-                    if l:
-                        d = l[0]
+                    for d in l:
+#                         if l:
+#                         d = l[0]
                         setting = d[0, :, 0, 0]
                         no_overlap = (abs(new_setting-setting)
                                       > threshold[:, 0]).sum()
@@ -197,8 +197,6 @@ class AL_env_entropy(object):
                                                             0, caused*self.args.num_atoms+causal, 1] += self.args.intervene_strength
                             no_caused = np.array(list(
                                 set(np.arange(self.args.num_atoms))-set(caused)))
-                            # import pdb
-                            # pdb.set_trace()
                             self.causal_model.rel_graph[0,
                                                         0, no_caused*self.args.num_atoms+causal, 0] += self.args.intervene_strength
 
@@ -286,7 +284,8 @@ class AL_env_entropy(object):
     def extract_features(self):
         # batch_size, num_nodes, step, dim
         # TODO: change it to include one hot feature
-        pred = self.causal_model(self.learning_assess_data)[0][:, :, :, 0]
+#         import pdb;pdb.set_trace()
+        pred = self.causal_model(self.learning_assess_data[:10,:,:,:])[0][:, :, :, 0]
         pred = pred.transpose(1, 2).detach()
         # learning_assess = self.learning_extractor(pred)
         learning_assess = pred
@@ -383,10 +382,11 @@ class AL_env_entropy(object):
         self.scheduler = lr_scheduler.StepLR(self.causal_model_optimizer, step_size=self.args.lr_decay,
                                              gamma=self.args.gamma)
         
-        new_datapoint, query_setting, _ = self.action_to_new_data([0,3,0,5])
-        self.obj_data[0].append(new_datapoint)
-        self.train_dataset.update(new_datapoint.clone())
-
+##### For invertion with fixed initial datapoint testing only.
+#         new_datapoint, query_setting, _ = self.action_to_new_data([0,3,0,5])
+#         self.obj_data[0].append(new_datapoint)
+#         self.train_dataset.update(new_datapoint.clone())
+#####
 
 #         self.init_train_data()
 #         load_weights='100_warmup_weights.pt'
@@ -423,31 +423,78 @@ class AL_env_entropy(object):
 #             self.causal_model.load_state_dict(weights)
 #             self.causal_model.rel_graph = graph.cuda()
 #             print('warm up weights loaded.')
-
+        
         if self.feature_extractors:
             # Make sure the output dim of both encoders are the same!
             self.obj_extractor = MLPEncoder(
                 self.args, 3, 128, self.args.extract_feat_dim).cuda()
-            self.obj_extractor_new = MLPEncoder(
-                self.args, 3, 128, self.args.extract_feat_dim).cuda()
-            self.obj_extractor_new.load_state_dict(self.obj_extractor.state_dict())
             self.obj_extractor_optimizer = optim.Adam(
-                list(self.obj_extractor_new.parameters()), lr=self.args.obj_extractor_lr)
-
+                list(self.obj_extractor.model.parameters()), lr=self.args.obj_extractor_lr)
             # TODO: try self.obj_data_extractor = MLPEncoder(args, 3, 64, 16).cuda()
             # Bidirectional LSTM
             self.obj_data_extractor = LSTMEncoder(
                 self.args.num_atoms, self.args.extract_feat_dim, num_direction=self.lstm_direction, batch_first=True).cuda()
-            self.obj_data_extractor_new = LSTMEncoder(
-                self.args.num_atoms, self.args.extract_feat_dim, num_direction=self.lstm_direction, batch_first=True).cuda()
-            self.obj_data_extractor_new.load_state_dict(self.obj_data_extractor.state_dict())
             self.obj_data_extractor_optimizer = optim.Adam(
-                list(self.obj_data_extractor_new.parameters()), lr=self.args.obj_data_extractor_lr)
-
+                list(self.obj_data_extractor.model.parameters())+[self.obj_data_extractor.h0, self.obj_data_extractor.c0], lr=self.args.obj_data_extractor_lr)
             self.learning_assess_extractor = LSTMEncoder(
                 8, self.args.extract_feat_dim, num_direction=self.lstm_direction, batch_first=True).cuda()
-            self.learning_assess_extractor_new = LSTMEncoder(
-                8, self.args.extract_feat_dim, num_direction=self.lstm_direction, batch_first=True).cuda()
-            self.learning_assess_extractor_new.load_state_dict(self.learning_assess_extractor.state_dict())
             self.learning_assess_extractor_optimizer = optim.Adam(list(
-                self.learning_assess_extractor_new.parameters()), lr=self.args.learning_assess_extractor_lr)
+                self.learning_assess_extractor.parameters())+[self.learning_assess_extractor.h0, self.learning_assess_extractor.c0], lr=self.args.learning_assess_extractor_lr)
+            
+#             checkpoint = torch.load('logs_RL/expRL_PPO_2021-01-27T13:01:29.595756_val-suffix_sliding_spaced_fixedgaussian0.1_new_interpolation_noise_0.1_causal-threshold_0.1_intervene_val-size_1000_patience_1_rl-update-timestep_512_rl-epochs_50000_rl-lr_1e-3_budget_17_K-epochs_20/PPO_others_34816.pth')
+            
+#             count = 0
+#             with torch.no_grad():
+#                 for i in self.obj_extractor.parameters():
+#                     i.copy_(checkpoint['obj_extractor'][count])
+#                     count += 1
+# #                 print('checkpoint[obj_extractor]', len(checkpoint['obj_extractor']), count)
+
+#                 count = 0
+#                 for i in self.obj_data_extractor.model.parameters():
+#                     i.copy_(checkpoint['obj_data_extractor'][count])
+#                     count += 1
+#                 self.obj_data_extractor.h0.copy_(checkpoint['obj_data_extractor'][count])
+#                 count += 1
+#                 self.obj_data_extractor.c0.copy_(checkpoint['obj_data_extractor'][count])
+#                 count += 1
+# #                 print('checkpoint[obj_data_extractor]', len(checkpoint['obj_data_extractor']), count)
+
+#                 count = 0
+#                 for i in self.learning_assess_extractor.model.parameters():
+#                     i.copy_(checkpoint['learning_assess_extractor'][count])
+#                     count += 1
+#                 self.learning_assess_extractor.h0.copy_(checkpoint['learning_assess_extractor'][count])
+#                 count += 1
+#                 self.learning_assess_extractor.c0.copy_(checkpoint['learning_assess_extractor'][count])
+#                 count += 1
+#                 print('checkpoint[learning_assess_extractor]', len(checkpoint['learning_assess_extractor']), count)
+#                 print('All loaded!')
+
+#         if self.feature_extractors:
+#             # Make sure the output dim of both encoders are the same!
+#             self.obj_extractor = MLPEncoder(
+#                 self.args, 3, 128, self.args.extract_feat_dim).cuda()
+#             self.obj_extractor_new = MLPEncoder(
+#                 self.args, 3, 128, self.args.extract_feat_dim).cuda()
+#             self.obj_extractor_new.load_state_dict(self.obj_extractor.state_dict())
+#             self.obj_extractor_optimizer = optim.Adam(
+#                 list(self.obj_extractor_new.parameters()), lr=self.args.obj_extractor_lr)
+
+#             # TODO: try self.obj_data_extractor = MLPEncoder(args, 3, 64, 16).cuda()
+#             # Bidirectional LSTM
+#             self.obj_data_extractor = LSTMEncoder(
+#                 self.args.num_atoms, self.args.extract_feat_dim, num_direction=self.lstm_direction, batch_first=True).cuda()
+#             self.obj_data_extractor_new = LSTMEncoder(
+#                 self.args.num_atoms, self.args.extract_feat_dim, num_direction=self.lstm_direction, batch_first=True).cuda()
+#             self.obj_data_extractor_new.load_state_dict(self.obj_data_extractor.state_dict())
+#             self.obj_data_extractor_optimizer = optim.Adam(
+#                 list(self.obj_data_extractor_new.parameters()), lr=self.args.obj_data_extractor_lr)
+
+#             self.learning_assess_extractor = LSTMEncoder(
+#                 8, self.args.extract_feat_dim, num_direction=self.lstm_direction, batch_first=True).cuda()
+#             self.learning_assess_extractor_new = LSTMEncoder(
+#                 8, self.args.extract_feat_dim, num_direction=self.lstm_direction, batch_first=True).cuda()
+#             self.learning_assess_extractor_new.load_state_dict(self.learning_assess_extractor.state_dict())
+#             self.learning_assess_extractor_optimizer = optim.Adam(list(
+#                 self.learning_assess_extractor_new.parameters()), lr=self.args.learning_assess_extractor_lr)
